@@ -294,6 +294,7 @@ class ForgeFlowTest(unittest.TestCase):
             "confirmed": {"need": True, "outcome": True},
         })
         self.assertEqual(patched.status_code, 200)
+        self.assertEqual(self.client.post(f"/api/tasks/{task_id}/test-lab", headers=bh).status_code, 503)
         examples = [{"kind": kind, "title": f"Сценарий {kind}", "steps": "Проверить прототип на обращении.",
                      "expected": "Показан вариант маршрутизации.", "open_question": "Какой порог точности нужен?", "confirmed": False}
                     for kind in ("normal", "edge", "failure")]
@@ -302,6 +303,7 @@ class ForgeFlowTest(unittest.TestCase):
         self.assertEqual(generated.status_code, 200)
         self.assertEqual(len(generated.json()["items"]), 3)
         self.assertEqual(generator.call_args.args[0]["need"], "Ускорить сортировку обращений клиентов.")
+        self.assertNotIn("users", generator.call_args.args[0])
         self.assertEqual(self.client.patch(f"/api/tasks/{task_id}/test-lab/normal", headers=th, json={"confirmed": True}).status_code, 403)
         self.assertEqual(self.client.patch(f"/api/tasks/{task_id}/test-lab/normal", headers=bh, json={"confirmed": True}).status_code, 200)
         self.client.post(f"/api/tasks/{task_id}/publish", headers=bh)
