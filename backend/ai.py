@@ -117,7 +117,7 @@ def analyze_task(task: dict) -> dict:
 
 
 def generate_questions(task: dict) -> dict:
-    fields = task["fields"]
+    fields = {key: value for key, value in task["fields"].items() if key == "context" or task["confirmed"].get(key)}
 
     prompt = (
         "Ты помогаешь представителю бизнеса сформулировать задачу для студенческой команды. "
@@ -125,7 +125,7 @@ def generate_questions(task: dict) -> dict:
         "Каждый вопрос связан с одним полем: need, users, data, outcome, success, constraints, contact, collaboration. "
         "Не добавляй фактов, которых не сообщил пользователь. Не выставляй рейтинг. "
         "Не повторяй уже ясные сведения. Ответ должен соответствовать заданной JSON-схеме.\n"
-        f"Описание и уже подтверждённые данные: {json.dumps(fields, ensure_ascii=False)}"
+        f"Описание и подтверждённые данные: {json.dumps(fields, ensure_ascii=False)}"
     )
     result = parse_response(Questions, "Ты редактор технических задач. Задавай только проверяемые вопросы.", prompt)
     try:

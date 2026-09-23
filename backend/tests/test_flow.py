@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from backend.ai import Question, validate_questions
+from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions
 from backend.main import app
 
 
@@ -54,6 +54,8 @@ class ForgeFlowTest(unittest.TestCase):
         task_id = task["id"]
         self.assertEqual(task["readiness"]["score"], 10)
         self.assertEqual(self.client.post(f"/api/tasks/{task_id}/analyze", headers=business_headers).status_code, 503)
+        self.assertEqual(self.client.post(f"/api/tasks/{task_id}/interview", headers=business_headers).status_code, 503)
+        self.assertEqual(self.client.get(f"/api/tasks/{task_id}", headers=team_headers).status_code, 403)
         with patch("backend.main.analyze_task", return_value={
             "title": "Сортировка обращений", "category": "AI",
             "suggestions": {"need": "Сократить время сортировки обращений клиентов."},
@@ -100,6 +102,10 @@ class ForgeFlowTest(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/proposals/{proposal_id}/progress", headers=business_headers).status_code, 409)
         updated_team = self.client.get("/api/auth/me", headers=team_headers).json()
         self.assertEqual(updated_team["team"]["points"], 20)
+        self.assertEqual(self.client.post("/api/auth/logout", headers=team_headers).status_code, 200)
+        self.assertEqual(self.client.get("/api/auth/me", headers=team_headers).status_code, 401)
+        relogin = self.client.post("/api/auth/login", json={"email": "team@test.org", "password": "another-secure-password"})
+        self.assertEqual(relogin.status_code, 200)
 
     def test_invalid_ai_questions_are_rejected(self):
         malformed = [
@@ -109,6 +115,25 @@ class ForgeFlowTest(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             validate_questions(malformed)
+
+    def test_ai_suggestions_require_source_quote_and_human_confirmation(self):
+        analysis = TaskAnalysis(
+            title="Сортировка обращений", category="AI",
+            suggestions=[
+                FieldSuggestion(field="need", value="Сократить время ручной сортировки.", source_quote="теряют время"),
+                FieldSuggestion(field="data", value="Доступны тысячи обращений в CSV.", source_quote="тысячи CSV"),
+            ],
+            questions=[
+                Question(field="data", question="Какие данные вы сможете передать команде?"),
+                Question(field="users", question="Кто будет пользоваться будущим решением?"),
+                Question(field="success", question="Как вы будете измерять успех решения?"),
+            ],
+        )
+        task = {"fields": {"context": "Сотрудники вручную распределяют обращения и теряют время."}}
+        with patch("backend.ai.parse_response", return_value=analysis):
+            result = analyze_task(task)
+        self.assertEqual(result["suggestions"], {"need": "Сократить время ручной сортировки."})
+        self.assertEqual(result["evidence"], {"need": "теряют время"})
 
 
 if __name__ == "__main__":

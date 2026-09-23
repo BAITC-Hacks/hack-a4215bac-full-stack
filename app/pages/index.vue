@@ -10,6 +10,7 @@ const drafts = ref([])
 const teams = ref([])
 const proposals = ref([])
 const user = ref(null)
+const booting = ref(true)
 const token = ref('')
 const authMode = ref('login')
 const authBusy = ref(false)
@@ -55,7 +56,9 @@ function notify(message) {
 
 function explain(error) {
   const detail = error?.data?.detail
-  return typeof detail === 'string' ? detail : 'Не удалось выполнить действие. Проверьте подключение к API.'
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) return `Проверьте заполнение: ${detail.map((item) => item.loc?.at(-1)).filter(Boolean).join(', ')}`
+  return 'Не удалось выполнить действие. Проверьте подключение к API.'
 }
 
 async function api(path, options = {}) {
@@ -90,7 +93,7 @@ async function logout() {
 
 onMounted(async () => {
   const saved = localStorage.getItem('forge_token')
-  if (!saved) return
+  if (!saved) { booting.value = false; return }
   token.value = saved
   try {
     user.value = await api('/api/auth/me')
@@ -99,7 +102,7 @@ onMounted(async () => {
   } catch {
     localStorage.removeItem('forge_token')
     token.value = ''; user.value = null
-  }
+  } finally { booting.value = false }
 })
 
 async function load() {
@@ -129,6 +132,7 @@ async function startTask() {
       try {
         const result = await api(`/api/tasks/${draft.value.id}/analyze`, { method: 'POST' })
         draft.value = result.task
+        drafts.value = drafts.value.map((item) => item.id === draft.value.id ? draft.value : item)
         questions.value = result.questions
         aiModel.value = result.model
         if (questions.value.length) phase.value = 'interview'
@@ -255,7 +259,8 @@ async function saveProfile() {
 </script>
 
 <template>
-  <div v-if="!user" class="auth-shell">
+  <div v-if="booting" class="boot-screen"><div class="loading-mark">✳</div><strong>FORGE</strong></div>
+  <div v-else-if="!user" class="auth-shell">
     <div class="auth-brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div>
     <div class="auth-layout">
       <section class="auth-story"><span class="eyebrow">AI SANA · ПРАКТИЧЕСКИЕ ЗАДАНИЯ</span><h1>Из настоящей проблемы — в сильный проект.</h1><p>Бизнес формулирует задачу с помощью AI. Команды выбирают вызов, предлагают решение и получают признание за реальный прогресс.</p><div class="auth-steps"><span>01 · Опишите проблему</span><span>02 · Сверьте факты</span><span>03 · Найдите команду</span></div></section>
