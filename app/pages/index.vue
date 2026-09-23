@@ -13,6 +13,7 @@ const user = ref(null)
 const booting = ref(true)
 const token = ref('')
 const authMode = ref('login')
+const authStarted = ref(false)
 const authBusy = ref(false)
 const authForm = reactive({ email: '', password: '', name: '', organization: '', role: 'business', skills: '' })
 const aiConfigured = ref(false)
@@ -74,6 +75,12 @@ function notify(message) {
   toastTimer = setTimeout(() => { toast.value = '' }, 4500)
 }
 
+function beginAuth(mode = 'register') {
+  authMode.value = mode
+  authStarted.value = true
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 function explain(error) {
   const detail = error?.data?.detail
   if (typeof detail === 'string') return detail
@@ -112,6 +119,7 @@ async function logout() {
   draft.value = null; selectedTaskId.value = null; inboxTaskId.value = null
   Object.assign(authForm, { email: '', password: '', name: '', organization: '', role: 'business', skills: '' })
   authMode.value = 'login'
+  authStarted.value = false
 }
 
 onMounted(async () => {
@@ -397,6 +405,41 @@ async function saveProfile() {
 
 <template>
   <div v-if="booting" class="boot-screen"><div class="loading-mark">✳</div><strong>FORGE</strong></div>
+  <div v-else-if="!user && !authStarted" class="landing-shell">
+    <header class="landing-nav">
+      <a class="landing-logo" href="#top" aria-label="FORGE — в начало"><span class="brand-mark">F<span>.</span></span><b>FORGE</b></a>
+      <nav aria-label="Разделы страницы"><a href="#how">Как работает</a><a href="#roles">Для кого</a><a href="#principles">Принципы</a></nav>
+      <div class="landing-nav-actions"><button class="landing-login" @click="beginAuth('login')">Войти</button><button class="button button-orange" @click="beginAuth('register')">Начать работу <span>↗</span></button></div>
+    </header>
+    <main id="top">
+      <section class="landing-hero">
+        <div class="landing-hero-copy"><span class="eyebrow">ПРАКТИЧЕСКИЕ ЗАДАЧИ · AI SANA</span><h1>Хорошее решение<br>начинается с <em>ясной задачи.</em></h1><p>FORGE помогает бизнесу описать реальную проблему и передать её команде с понятными требованиями, материалами и критериями результата.</p><div class="landing-hero-actions"><button class="button button-orange" @click="beginAuth('register')">Создать аккаунт <span>↗</span></button><a class="landing-text-link" href="#how">Посмотреть, как это устроено <span>↓</span></a></div><div class="landing-proof"><span class="proof-mark">✳</span><span>От первого описания до готового к передаче Task Pack</span></div></div>
+        <div class="landing-hero-visual" aria-label="Путь задачи в FORGE">
+          <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div><div class="visual-core"><span>F.</span><small>ЗАДАЧА<br>ГОТОВА К СТАРТУ</small></div>
+          <div class="visual-node node-problem"><i>01</i><span>Проблема</span><b>Что нужно изменить?</b></div><div class="visual-node node-pack"><i>02</i><span>Task Pack</span><b>Контекст · данные · успех</b></div><div class="visual-node node-team"><i>03</i><span>Команда</span><b>План и предложение</b></div><div class="visual-caption"><span class="live-dot"></span> ПОНЯТНЫЙ МАРШРУТ РАБОТЫ</div>
+        </div>
+        <div class="landing-scroll-note">ПРОКРУТИТЕ, ЧТОБЫ УЗНАТЬ БОЛЬШЕ <span>↓</span></div>
+      </section>
+
+      <section class="landing-intro" id="how"><div class="landing-section-kicker"><span>01 / ЧТО ТАКОЕ FORGE</span><i></i><span>ОТ ИДЕИ К ДЕЙСТВИЮ</span></div><div class="landing-intro-grid"><h2>Меньше догадок.<br><em>Больше ясности</em><br>до старта.</h2><div><p>FORGE — рабочая платформа, которая превращает бизнес-запрос в структурированное практическое задание для команд. Автор не просто публикует текст: он уточняет детали, подтверждает факты и видит, чего пока не хватает для уверенного старта.</p><p>Команда изучает описание и открытые замечания, задаёт вопросы и отправляет свой план. Бизнес сравнивает подходы и сам принимает решение.</p><button class="inline-arrow" @click="beginAuth('register')">Попробовать FORGE <span>↗</span></button></div></div></section>
+
+      <section class="landing-flow"><div class="landing-section-heading"><span class="eyebrow">02 / ОДИН ПОНЯТНЫЙ ПРОЦЕСС</span><h2>От описания до передачи<br>задачи — <em>по шагам.</em></h2><p>Каждый этап помогает снять конкретную неопределённость до того, как команда начнёт работу.</p></div><div class="landing-flow-grid">
+        <article><span class="flow-number">01</span><div class="flow-glyph">↗</div><h3>Опишите ситуацию</h3><p>Расскажите своими словами, что происходит, где возникает проблема и какого изменения вы ждёте.</p><small>ЧЕРНОВИК СОХРАНЯЕТСЯ В КАБИНЕТЕ</small></article>
+        <article><span class="flow-number">02</span><div class="flow-glyph">⌕</div><h3>Уточните важное</h3><p>Разберите контекст, доступные данные, ограничения, пользователей и критерии успешного результата.</p><small>AI-ПОДСКАЗКИ НУЖНО ПРОВЕРИТЬ</small></article>
+        <article><span class="flow-number">03</span><div class="flow-glyph">▤</div><h3>Соберите Task Pack</h3><p>Проверьте структурированную карточку, источники сведений и замечания компилятора готовности.</p><small>ОЦЕНКА ОБЪЯСНЯЕТСЯ ПО ПОЛЯМ</small></article>
+        <article><span class="flow-number">04</span><div class="flow-glyph">⇢</div><h3>Передайте командам</h3><p>Опубликуйте задачу, изучите планы и прототипы команд и вручную выберите дальнейший формат работы.</p><small>РЕШЕНИЕ ОСТАЁТСЯ ЗА БИЗНЕСОМ</small></article>
+      </div></section>
+
+      <section class="landing-roles" id="roles"><div class="landing-section-heading"><span class="eyebrow">03 / ДВА ВЗГЛЯДА НА ОДНУ ЗАДАЧУ</span><h2>Вы приносите опыт.<br>Платформа помогает <em>свести его вместе.</em></h2></div><div class="landing-role-grid"><article class="role-card role-business"><span class="eyebrow">ДЛЯ БИЗНЕСА</span><div class="role-illustration business-illustration"><span class="role-line"></span><b>ЗАДАЧА<br><em>01</em></b><span class="role-chip">контекст</span><span class="role-chip">результат</span><span class="role-chip">данные</span></div><h3>Объяснить проблему<br>и найти подход</h3><p>Создайте задачу, заполните карточку, проверьте готовность, опубликуйте её и сравните предложения команд. Вы контролируете описание и решение.</p><button class="inline-arrow" @click="beginAuth('register'); authForm.role = 'business'">Я представляю бизнес <span>↗</span></button></article><article class="role-card role-team"><span class="eyebrow">ДЛЯ КОМАНД</span><div class="role-illustration team-illustration"><div class="avatar-stack"><i>UX</i><i>AI</i><i>DA</i></div><span class="team-connector">······→</span><b>ИДЕЯ<br><em>В ПРОТОТИП</em></b></div><h3>Найти задачу<br>для своих навыков</h3><p>Изучайте опубликованные задания и их открытые замечания, отправляйте идею и план работы, добавляйте срок и ссылку на прототип.</p><button class="inline-arrow" @click="beginAuth('register'); authForm.role = 'team'">Я представляю команду <span>↗</span></button></article></div></section>
+
+      <section class="landing-detail" id="principles"><div class="detail-side"><span class="eyebrow">04 / ЧТО ПОМОГАЕТ РАБОТАТЬ УВЕРЕННЕЕ</span><h2>Понятность —<br>это <em>функция.</em></h2><p>FORGE показывает не только карточку задачи, но и логику её подготовки.</p><button class="button button-orange" @click="beginAuth('register')">Начать с FORGE <span>↗</span></button></div><div class="detail-list"><article><b>01</b><div><h3>Проверяемая готовность</h3><p>Компилятор считает баллы по подтверждённым полям и показывает ошибки, предупреждения и следующий полезный шаг. Оценка — ориентир по полноте, а не гарантия успеха проекта.</p></div><span>↗</span></article><article><b>02</b><div><h3>AI с понятной ролью</h3><p>При подключённом серверном ключе AI помогает разобрать текст и сформулировать вопросы. Его предложения не становятся подтверждёнными фактами без проверки автором. Без ключа работают явно обозначенные вопросы по правилам.</p></div><span>↗</span></article><article><b>03</b><div><h3>Честная передача</h3><p>Handoff Test помогает заметить, что ещё нужно другой команде для старта. Опубликованная задача может содержать замечания — они остаются видны командам.</p></div><span>↗</span></article><article><b>04</b><div><h3>Решение принимает человек</h3><p>Команды отправляют идеи и планы; бизнес сам сравнивает их и вручную выбирает одну, несколько или ни одной. Алгоритм не назначает победителя.</p></div><span>↗</span></article></div></section>
+
+      <section class="landing-faq"><div><span class="eyebrow">05 / ПЕРЕД СТАРТОМ</span><h2>Частые вопросы</h2><p>Коротко о том, как устроена работа в FORGE.</p></div><div class="faq-list"><details><summary>Нужен ли AI, чтобы пользоваться платформой?<span>＋</span></summary><p>Нет. Создание задач, оценка готовности по правилам, Task Pack, публикация и отклики доступны без AI. Если OpenAI API не настроен, интерфейс прямо сообщает, что вместо AI-интервью используются правиловые вопросы.</p></details><details><summary>Можно ли опубликовать неидеально заполненную задачу?<span>＋</span></summary><p>Да. Платформа показывает открытые ошибки и предупреждения, чтобы автор мог осознанно решить, готов ли передать задание в таком виде. Замечания также видны командам.</p></details><details><summary>Кто выбирает команду для работы?<span>＋</span></summary><p>Представитель бизнеса. FORGE помогает изучить предложения, но не ранжирует их как автоматическое решение и не выбирает победителя.</p></details><details><summary>Кому подходит платформа?<span>＋</span></summary><p>Бизнесу, которому нужно ясно описать практическую задачу, и командам, которые хотят предложить решение на основе своих навыков.</p></details></div></section>
+
+      <section class="landing-cta"><div><span class="eyebrow">ГОТОВЫ НАЧАТЬ?</span><h2>Сделайте следующий шаг<br><em>понятным для всех.</em></h2><p>Создайте аккаунт и выберите, с какой стороны вы хотите работать с задачами.</p></div><button class="button button-orange" @click="beginAuth('register')">Создать аккаунт в FORGE <span>↗</span></button><span class="cta-orbit cta-orbit-a"></span><span class="cta-orbit cta-orbit-b"></span></section>
+    </main>
+    <footer class="landing-footer"><a class="landing-logo" href="#top"><span class="brand-mark">F<span>.</span></span><b>FORGE</b></a><span>AI Sana · Практические задачи для совместной работы</span><button @click="beginAuth('login')">Уже есть аккаунт? Войти ↗</button></footer>
+  </div>
   <div v-else-if="!user" class="auth-shell">
     <div class="auth-brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div>
     <div class="auth-layout">

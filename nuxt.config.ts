@@ -2,7 +2,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-09-23',
   devtools: { enabled: false },
   ssr: false,
-  css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css'],
+  css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css', '~/assets/landing.css'],
   app: {
     head: {
       title: 'FORGE — практические задачи AI Sana',
