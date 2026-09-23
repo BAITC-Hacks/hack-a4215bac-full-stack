@@ -15,7 +15,7 @@ function requestRole(person, event) { const role = event.target.value; event.tar
 
 <template>
   <div class="page admin-page">
-    <div class="admin-hero"><div><span class="eyebrow">FORGE / CONTROL CENTER</span><h1>Всё важное —<br><em>под контролем.</em></h1><p>Управляйте доступом и отслеживайте работу платформы. Затраты AI рассчитаны по записанным токенам и тарифу модели.</p><div class="admin-hero-actions"><span :class="['admin-live', { off: !overview.ai_configured }]">{{ overview.ai_configured ? '● OpenAI подключён' : '● OpenAI не настроен' }}</span><span>Модель: {{ overview.model }}</span></div></div><button class="button button-ghost" :disabled="busy" @click="emit('refresh')">↻ Обновить данные</button></div>
+    <div class="admin-hero"><div><span class="eyebrow">FORGE / CONTROL CENTER</span><h1>Всё важное —<br><em>под контролем.</em></h1><p>Управляйте доступом и отслеживайте работу платформы. Затраты AI рассчитаны по записанным токенам и тарифу модели.</p><div class="admin-hero-actions"><span :class="['admin-live', { off: !overview.ai_configured }]">{{ overview.ai_configured ? 'OpenAI подключён' : 'OpenAI не настроен' }}</span><span>Модель: {{ overview.model }}</span></div></div><button class="button button-ghost" :disabled="busy" @click="emit('refresh')"><ForgeIcon name="refresh" size="15" /> Обновить данные</button></div>
 
     <div class="admin-tabs" role="tablist" aria-label="Разделы панели администратора"><button v-for="item in [['overview','Обзор'],['users','Пользователи и роли'],['usage','AI и токены'],['audit','История ролей']]" :key="item[0]" :class="{ active: tab === item[0] }" role="tab" :aria-selected="tab === item[0]" @click="tab = item[0]">{{ item[1] }}</button></div>
 

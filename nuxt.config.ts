@@ -3,6 +3,11 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   ssr: false,
   css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css', '~/assets/landing.css'],
+  nitro: {
+    devProxy: {
+      '/api': { target: 'http://127.0.0.1:8000/api', changeOrigin: true },
+    },
+  },
   app: {
     head: {
       title: 'FORGE — практические задачи AI Sana',
@@ -15,6 +20,6 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
-    public: { apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000' },
+    public: { apiBase: process.env.NUXT_PUBLIC_API_BASE || '' },
   },
 })
