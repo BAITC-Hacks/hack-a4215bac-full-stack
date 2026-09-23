@@ -68,6 +68,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS ai_usage (
                 id TEXT PRIMARY KEY, actor_id TEXT REFERENCES users(id), task_id TEXT REFERENCES tasks(id),
                 operation TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'openai',
                 input_tokens INTEGER NOT NULL DEFAULT 0, cached_input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL,
                 created_at TEXT NOT NULL
@@ -93,6 +94,9 @@ def init_db():
         for name, definition in additions.items():
             if name not in columns:
                 db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        usage_columns = {row["name"] for row in db.execute("PRAGMA table_info(ai_usage)")}
+        if "provider" not in usage_columns:
+            db.execute("ALTER TABLE ai_usage ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'")
         proposal_columns = {row["name"] for row in db.execute("PRAGMA table_info(proposals)")}
         if "questions" not in proposal_columns:
             db.execute("ALTER TABLE proposals ADD COLUMN questions TEXT NOT NULL DEFAULT ''")

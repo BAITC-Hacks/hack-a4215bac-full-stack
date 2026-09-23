@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
-from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions, review_handoff
+from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions, review_handoff, review_handoff_nvidia
 from .auth import current_user, hash_password, issue_session, require_owner, require_role, user_with_team, verify_password
 from .compiler import EXTRAS, handoff_rules
 from .domain import FIELDS, enrich_task, valid_value
@@ -136,7 +136,7 @@ def next_version(current: str, score: int) -> str:
 
 
 def visible_task(task: dict, user: dict) -> dict:
-    if user["role"] == "business" and task["owner_id"] == user["id"]:
+    if user["role"] in {"business", "admin"} and task["owner_id"] == user["id"]:
         return task
     result = {**task}
     result["fields"] = {key: value if task["confirmed"].get(key) else "" for key, value in task["fields"].items()}
@@ -411,24 +411,33 @@ def run_handoff(task_id: str, user: dict = Depends(current_user)):
         task = get_task_or_404(db, task_id)
         require_owner(user, task)
         result = handoff_rules(task)
-        if os.getenv("OPENAI_API_KEY", "").strip():
+        if os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("NVIDIA_API_KEY", "").strip():
             from .compiler import confirmed, value_of
 
             card = {key: value_of(task, key) for key in list(FIELDS) + list(EXTRAS) + ["deadline"]
                     if confirmed(task, key)}
-            try:
-                ai_checks = review_handoff(card, user["id"], task_id)
-                for check in result["checks"]:
-                    ai_check = ai_checks[check["id"]]
-                    if check["passed"] and not ai_check["passed"]:
-                        check["passed"] = False
-                        check["explanation"] = ai_check["explanation"]
-                        check["consequence"] = "Формулировку можно трактовать по-разному."
-                result["passed"] = sum(item["passed"] for item in result["checks"])
-                result["mode"] = "openai"
-                result["notice"] = "Дополнительная AI-проверка понятности, не объективный прогноз успеха проекта."
-            except (AIUnavailable, AIServiceError, ValueError):
-                result["notice"] = "AI-проверка недоступна; показана независимая правиловая проверка подтверждённых данных."
+            reviewers = []
+            for provider, enabled, reviewer in (
+                ("OpenAI", os.getenv("OPENAI_API_KEY", "").strip(), review_handoff),
+                ("NVIDIA", os.getenv("NVIDIA_API_KEY", "").strip(), review_handoff_nvidia),
+            ):
+                if not enabled:
+                    continue
+                try:
+                    ai_checks = reviewer(card, user["id"], task_id)
+                    reviewers.append(provider)
+                    for check in result["checks"]:
+                        ai_check = ai_checks[check["id"]]
+                        if check["passed"] and not ai_check["passed"]:
+                            check["passed"] = False
+                            check["explanation"] = f"{provider}: {ai_check['explanation']}"
+                            check["consequence"] = "Формулировку можно трактовать по-разному."
+                except (AIUnavailable, AIServiceError, ValueError):
+                    continue
+            result["passed"] = sum(item["passed"] for item in result["checks"])
+            result["mode"] = "+".join(reviewers).lower() if reviewers else "rules"
+            result["notice"] = (f"Проверка по правилам и независимая рецензия: {', '.join(reviewers)}. Это не прогноз успеха." if reviewers
+                                else "AI-рецензия недоступна; показана правиловая проверка подтверждённых данных.")
         result["version"] = task["pack_version"]
         result["checked_at"] = now()
         task["handoff_result"] = result
@@ -472,7 +481,9 @@ def update_my_team(payload: TeamPatch, user: dict = Depends(current_user)):
 @app.get("/api/proposals")
 def list_proposals(task_id: str | None = None, user: dict = Depends(current_user)):
     with connect() as db:
-        if user["role"] == "business":
+        if user["role"] == "admin":
+            rows = db.execute("SELECT * FROM proposals" + (" WHERE task_id = ?" if task_id else "") + " ORDER BY created_at DESC", (task_id,) if task_id else ()).fetchall()
+        elif user["role"] == "business":
             if task_id:
                 task = get_task_or_404(db, task_id)
                 require_owner(user, task)

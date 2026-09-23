@@ -1,4 +1,4 @@
-"""OpenAI analysis and interview. No synthetic AI output is shown as real AI."""
+"""OpenAI drafting and optional NVIDIA NIM second opinion, with usage records."""
 
 import json
 import logging
@@ -96,18 +96,18 @@ def usage_cost(model: str, input_tokens: int, cached_tokens: int, output_tokens:
 
 
 def record_usage(operation: str, model: str, status: str, response=None, actor_id: str | None = None,
-                 task_id: str | None = None):
+                 task_id: str | None = None, provider: str = "openai"):
     usage = getattr(response, "usage", None)
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    input_tokens = int(getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", 0) or 0)
     cached_tokens = min(input_tokens, int(getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0))
-    cost = usage_cost(model, input_tokens, cached_tokens, output_tokens) if usage else None
+    cost = usage_cost(model, input_tokens, cached_tokens, output_tokens) if usage and provider == "openai" else None
     try:
         with connect() as db:
-            db.execute("""INSERT INTO ai_usage (id, actor_id, task_id, operation, model, status,
+            db.execute("""INSERT INTO ai_usage (id, actor_id, task_id, operation, model, status, provider,
                        input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                       (str(uuid.uuid4()), actor_id, task_id, operation, model, status,
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (str(uuid.uuid4()), actor_id, task_id, operation, model, status, provider,
                         input_tokens, cached_tokens, output_tokens, cost, datetime.now(timezone.utc).isoformat()))
     except Exception as exc:
         logger.warning("AI usage ledger unavailable: %s", type(exc).__name__)
@@ -205,3 +205,35 @@ def review_handoff(confirmed_card: dict, actor_id: str | None = None, task_id: s
         raise AIServiceError("AI вернул некорректную проверку передачи.")
     return {item.id: {"passed": item.passed, "explanation": item.explanation.strip()[:500]}
             for item in result.checks}
+
+
+def review_handoff_nvidia(confirmed_card: dict, actor_id: str | None = None, task_id: str | None = None) -> dict:
+    """Optional second opinion from NVIDIA NIM, using only confirmed task facts."""
+    api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+    if not api_key:
+        raise AIUnavailable("NVIDIA_API_KEY не задан")
+    model = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+    client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1", timeout=25.0, max_retries=1)
+    response = None
+    try:
+        response = client.chat.completions.create(
+            model=model, temperature=0.2, max_tokens=750,
+            messages=[
+                {"role": "system", "content": "Ты второй независимый рецензент бизнес-задачи. Ответь только JSON-объектом с ключом checks: массив из ровно пяти объектов id, passed, explanation. id: problem, users, data, deliverable, acceptance. Пиши объяснения на русском, не выдумывай факты. Если сведений недостаточно, passed=false."},
+                {"role": "user", "content": "Оцени, достаточно ли подтверждённых сведений для старта команды. Карточка: " + json.dumps(confirmed_card, ensure_ascii=False)},
+            ],
+        )
+        content = response.choices[0].message.content or ""
+        start, end = content.find("{"), content.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("NVIDIA returned no JSON")
+        result = HandoffReview.model_validate_json(content[start:end + 1])
+        expected = {"problem", "users", "data", "deliverable", "acceptance"}
+        if len(result.checks) != 5 or {item.id for item in result.checks} != expected:
+            raise ValueError("NVIDIA returned incomplete checks")
+        record_usage("handoff_second_opinion", model, "completed", response, actor_id, task_id, "nvidia")
+        return {item.id: {"passed": item.passed, "explanation": item.explanation.strip()[:500]} for item in result.checks}
+    except Exception as exc:
+        record_usage("handoff_second_opinion", model, "failed", response, actor_id, task_id, "nvidia")
+        logger.warning("NVIDIA NIM request failed: %s", type(exc).__name__)
+        raise AIServiceError("Независимая NVIDIA-проверка сейчас недоступна.") from exc

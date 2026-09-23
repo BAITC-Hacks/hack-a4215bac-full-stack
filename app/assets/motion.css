@@ -1,0 +1,74 @@
+/* FORGE · restrained motion and a single warm accent. */
+:root{--forge-accent:#c89a70;--forge-accent-bright:#e0b58d}
+::selection{background:#a87550;color:#fff}
+:focus-visible{outline-color:var(--forge-accent-bright)!important}
+.accent-text,.landing-section-kicker span:first-child,.landing-hero h1 em,.landing-intro h2 em,.landing-section-heading h2 em,.landing-detail h2 em,.landing-cta h2 em{color:var(--forge-accent-bright)}
+.button-orange{background:linear-gradient(135deg,#e6bb96,#bb865b);color:#15110e;border-color:#d4a77f;box-shadow:0 7px 23px rgba(154,91,45,.19)}
+.button-orange:hover{background:linear-gradient(135deg,#f2caa6,#cb9367);box-shadow:0 10px 29px rgba(154,91,45,.29);transform:translateY(-2px)}
+.button:active{transform:translateY(0) scale(.985)}
+.sidebar .nav-item.active{border-color:#72543f;background:linear-gradient(100deg,#342a24,#1c1d21)}
+.sidebar .nav-item.active .nav-icon,.sidebar .nav-item.active .nav-count,.admin-nav-link .nav-icon{color:var(--forge-accent-bright)}
+.admin-nav-link{margin-top:14px!important;border-top:1px solid #353137!important;border-radius:0!important;padding-top:18px!important}
+.flow-steps button.active{background:#c99b75;border-color:#c99b75;color:#19120e}
+.auth-switch button.active,.role-picker button.active{border-color:#946746;background:#33271f;color:#f7eee7}
+.auth-back{align-self:flex-start;margin-top:20px;display:inline-flex;align-items:center;gap:9px;padding:7px 0;border:0;background:none;color:#bdc0c6;font-size:12px;font-weight:750;transition:color .2s,transform .2s}
+.auth-back:hover{color:var(--forge-accent-bright);transform:translateX(-3px)}
+.process-hint{margin-top:auto;padding-top:18px;border-top:1px solid #3a3532;color:#b8aaa0;font-size:11px;line-height:1.55}
+
+/* Tactile, human-centred photography replaces abstract diagram artwork. */
+.workspace-hero{background-image:url('/forge-brief-v2.webp')!important;background-position:center!important}
+.catalog-heading{background-image:url('/forge-collaboration-v2.webp')!important;background-position:center!important}
+.admin-hero{background-image:url('/forge-brief-v2.webp')!important;background-position:center!important}
+.intro-panel::before{background-image:url('/forge-brief-v2.webp')!important;background-position:center 54%!important}
+.admin-feature-image{background-image:url('/forge-collaboration-v2.webp')!important;background-position:center!important}
+.auth-story::after{background-image:url('/forge-collaboration-v2.webp')!important;background-position:center!important;opacity:.8}
+.task-card::before{background-image:url('/forge-brief-v2.webp')!important;opacity:.085}
+.landing-hero-visual::before{background-image:url('/forge-brief-v2.webp')!important;opacity:.26;filter:grayscale(.45)}
+.role-illustration{border-radius:10px;background-size:cover!important;background-position:center!important;border-color:#53453e}
+.business-illustration{background-image:linear-gradient(90deg,rgba(12,12,14,.65),transparent),url('/forge-brief-v2.webp')!important}
+.team-illustration{background-image:linear-gradient(90deg,rgba(12,12,14,.48),transparent),url('/forge-collaboration-v2.webp')!important}
+.role-illustration>*{display:none!important}
+.business-illustration::before,.business-illustration::after{display:none}
+
+/* A true orbital system: all three cards travel around the centred mark. */
+.landing-hero-visual{--orbit-radius:177px;min-width:0}
+.visual-orbit{width:355px;height:355px;transform:none;border-color:rgba(200,154,112,.23)}
+.orbit-two{width:435px;height:435px;transform:none;border-color:rgba(196,198,204,.09);border-style:dashed}
+.visual-core{position:relative;z-index:2;width:144px;height:144px;border-color:#ad805e;background:radial-gradient(circle at 32% 22%,#514033,#222024 48%,#111216 85%);box-shadow:0 0 0 9px rgba(200,154,112,.05),0 0 82px rgba(192,137,94,.20),inset 0 1px rgba(255,255,255,.2)}
+.visual-core .core-dot{color:var(--forge-accent-bright)}
+.orbit-track{position:absolute;left:50%;top:50%;width:0;height:0;z-index:3;animation:forge-orbit 30s linear infinite}
+.orbit-track-two{animation-delay:-10s}.orbit-track-three{animation-delay:-20s}
+.orbit-anchor{position:absolute;left:var(--orbit-radius);top:0;transform:translate(-50%,-50%)}
+.orbit-track .visual-node{position:relative;left:auto;top:auto;width:160px;min-width:0;box-sizing:border-box;transform:rotate(68deg);background:linear-gradient(145deg,rgba(42,39,38,.96),rgba(22,22,25,.98));border-color:#6b5548;box-shadow:0 14px 38px rgba(0,0,0,.47),inset 0 1px rgba(255,255,255,.08);animation:forge-counter-orbit 30s linear infinite}
+.orbit-track-two .visual-node{animation-delay:-10s}.orbit-track-three .visual-node{animation-delay:-20s}
+.orbit-track .visual-node i{color:var(--forge-accent-bright)}
+.orbit-track .visual-node span{color:#f5f1ed}
+.landing-hero-visual:hover .orbit-track,.landing-hero-visual:hover .orbit-track .visual-node,.landing-hero-visual:focus-within .orbit-track,.landing-hero-visual:focus-within .orbit-track .visual-node{animation-play-state:paused}
+.visual-caption{color:#bba996}.live-dot{background:var(--forge-accent);box-shadow:0 0 10px #ad7952}
+@keyframes forge-orbit{from{transform:rotate(-68deg)}to{transform:rotate(292deg)}}
+@keyframes forge-counter-orbit{from{transform:rotate(68deg)}to{transform:rotate(-292deg)}}
+
+/* Scroll arrival, local hover feedback and quiet ambient movement. */
+.landing-shell .reveal{opacity:0;transform:translateY(26px);transition:opacity .75s ease,transform .85s cubic-bezier(.22,1,.36,1)}
+.landing-shell .reveal.is-visible{opacity:1;transform:none}
+.landing-hero-copy{animation:forge-rise .85s cubic-bezier(.22,1,.36,1) both}
+.landing-hero-visual{animation:forge-appear 1.1s .15s ease both}
+@keyframes forge-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+@keyframes forge-appear{from{opacity:0;filter:blur(9px)}to{opacity:1;filter:blur(0)}}
+.landing-flow-grid article,.role-card,.detail-list article{transition:transform .3s cubic-bezier(.22,1,.36,1),border-color .3s,background .3s,box-shadow .3s}
+.landing-flow-grid article:hover{background:#242326;transform:translateY(-5px);z-index:1;box-shadow:0 20px 32px rgba(0,0,0,.22)}
+.role-card:hover{transform:translateY(-5px);border-color:#8e6d56;box-shadow:0 22px 50px rgba(0,0,0,.25)}
+.role-card:hover .role-illustration{background-size:105%!important}
+.detail-list article:hover{transform:translateX(6px);border-color:#926d52}
+.faq-list details[open]{border-color:#836149}.faq-list summary:hover{color:var(--forge-accent-bright)}
+.cta-orbit{animation:forge-breathe 12s ease-in-out infinite alternate}.cta-orbit-b{animation-delay:-6s}
+@keyframes forge-breathe{from{transform:scale(.94);opacity:.5}to{transform:scale(1.08);opacity:1}}
+.landing-cta{background:radial-gradient(ellipse at 77% 12%,rgba(176,116,76,.13),transparent 42%),linear-gradient(115deg,#1d1c1d,#111216)}
+.landing-text-link:hover,.inline-arrow:hover{color:var(--forge-accent-bright)}
+
+/* Admin sees the cross-platform inbox but cannot decide on another business's behalf. */
+.admin-readonly{color:#b8aca3;font-size:11px}
+
+@media(min-width:701px) and (max-width:1000px){.landing-hero-visual{transform:scale(.82) translateX(20px)}}
+@media(max-width:700px){.landing-hero-visual{--orbit-radius:125px;transform:none;height:365px;margin:20px -6px 0}.visual-orbit{width:250px;height:250px}.orbit-two{width:310px;height:310px}.orbit-track .visual-node{width:118px;padding:8px 9px}.orbit-track .visual-node b{display:none}.orbit-track .visual-node span{font-size:10px;margin:4px 0 0}.visual-core{width:112px;height:112px}.visual-core>span{font-size:38px}.visual-core small{font-size:6px}.visual-caption{bottom:-4px;right:6%}.auth-back{margin-top:12px}}
+@media(prefers-reduced-motion:reduce){.landing-shell .reveal,.landing-shell .reveal.is-visible{opacity:1;transform:none;transition:none}.landing-hero-copy,.landing-hero-visual,.orbit-track,.orbit-track .visual-node,.cta-orbit{animation:none!important}.orbit-track-one{transform:rotate(-68deg)}.orbit-track-two{transform:rotate(52deg)}.orbit-track-three{transform:rotate(172deg)}.orbit-track-one .visual-node{transform:rotate(68deg)}.orbit-track-two .visual-node{transform:rotate(-52deg)}.orbit-track-three .visual-node{transform:rotate(-172deg)}.button,.role-card,.detail-list article,.landing-flow-grid article{transition:none!important}}

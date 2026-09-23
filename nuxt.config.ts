@@ -2,7 +2,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-09-23',
   devtools: { enabled: false },
   ssr: false,
-  css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css', '~/assets/landing.css'],
+  css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css', '~/assets/landing.css', '~/assets/motion.css'],
   nitro: {
     devProxy: {
       '/api': { target: 'http://127.0.0.1:8000/api', changeOrigin: true },

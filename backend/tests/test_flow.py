@@ -7,10 +7,11 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions, parse_response, usage_cost
+from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions, parse_response, review_handoff_nvidia, usage_cost
 from backend.compiler import compile_readiness, handoff_rules
 from backend.domain import FIELDS
 from backend.main import app
+from backend.storage import connect
 
 
 class ForgeFlowTest(unittest.TestCase):
@@ -18,8 +19,10 @@ class ForgeFlowTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.old_db = os.environ.get("DATABASE_PATH")
         self.old_key = os.environ.get("OPENAI_API_KEY")
+        self.old_nvidia_key = os.environ.get("NVIDIA_API_KEY")
         os.environ["DATABASE_PATH"] = str(Path(self.temp.name) / "test.db")
         os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("NVIDIA_API_KEY", None)
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
 
@@ -32,6 +35,8 @@ class ForgeFlowTest(unittest.TestCase):
             os.environ["DATABASE_PATH"] = self.old_db
         if self.old_key is not None:
             os.environ["OPENAI_API_KEY"] = self.old_key
+        if self.old_nvidia_key is not None:
+            os.environ["NVIDIA_API_KEY"] = self.old_nvidia_key
 
     def test_full_jury_flow(self):
         self.assertEqual(self.client.get("/api/tasks").status_code, 401)
@@ -236,6 +241,57 @@ class ForgeFlowTest(unittest.TestCase):
         self.assertEqual(overview["usage"]["output_tokens"], 500)
         self.assertEqual(overview["usage"]["estimated_cost_usd"], 0.00114)
         self.assertEqual(len(overview["role_audit"]), 3)
+
+    def test_admin_main_workspace_is_available_and_other_business_decides(self):
+        admin = self.client.post("/api/auth/register", json={
+            "email": "admin@test.org", "password": "long-secure-password", "name": "Admin",
+            "organization": "FORGE", "role": "business", "skills": [],
+        }).json()
+        business = self.client.post("/api/auth/register", json={
+            "email": "other@test.org", "password": "long-secure-password", "name": "Owner",
+            "organization": "Other", "role": "business", "skills": [],
+        }).json()
+        team = self.client.post("/api/auth/register", json={
+            "email": "team2@test.org", "password": "long-secure-password", "name": "Team",
+            "organization": "Builders", "role": "team", "skills": ["Python"],
+        }).json()
+        ah = {"Authorization": f"Bearer {admin['token']}"}
+        bh = {"Authorization": f"Bearer {business['token']}"}
+        th = {"Authorization": f"Bearer {team['token']}"}
+        with patch.dict(os.environ, {"ADMIN_BOOTSTRAP_TOKEN": "a-long-random-bootstrap-secret-12345"}):
+            self.assertEqual(self.client.post("/api/admin/bootstrap", headers=ah, json={"token": "a-long-random-bootstrap-secret-12345"}).status_code, 200)
+        own = self.client.post("/api/tasks", headers=ah, json={"raw": "Нужно ускорить обработку писем клиентов и подготовить понятный план."})
+        self.assertEqual(own.status_code, 201)
+        other = self.client.post("/api/tasks", headers=bh, json={"raw": "Нужно ускорить обработку входящих звонков и подготовить понятный план."}).json()
+        self.assertEqual(self.client.post(f"/api/tasks/{other['id']}/publish", headers=bh).status_code, 200)
+        self.assertEqual(len(self.client.get("/api/tasks", headers=ah).json()), 1)
+        self.assertEqual(len(self.client.get("/api/tasks?published=false", headers=ah).json()), 1)
+        sent = self.client.post("/api/proposals", headers=th, json={"task_id": other["id"], "idea": "Сделаем маршрутизацию по темам.", "plan": "Соберём данные и протестируем модель.", "deadline": "10 дней"}).json()
+        self.assertEqual(len(self.client.get("/api/proposals", headers=ah).json()), 1)
+        self.assertEqual(self.client.patch(f"/api/proposals/{sent['id']}/decision", headers=ah, json={"status": "accepted"}).status_code, 403)
+        checks = {key: {"passed": False, "explanation": "Нужны детали."} for key in ["problem", "users", "data", "deliverable", "acceptance"]}
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-nvidia-key"}), patch("backend.main.review_handoff_nvidia", return_value=checks) as reviewer:
+            result = self.client.post(f"/api/tasks/{own.json()['id']}/handoff", headers=ah)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["mode"], "nvidia")
+        reviewer.assert_called_once()
+
+    def test_nvidia_usage_records_tokens_without_inventing_cost(self):
+        content = '{"checks":[' + ','.join(
+            '{"id":"' + key + '","passed":false,"explanation":"Нужны уточнения"}'
+            for key in ["problem", "users", "data", "deliverable", "acceptance"]) + ']}'
+        response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+                                   usage=SimpleNamespace(prompt_tokens=180, completion_tokens=75))
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-nvidia-key"}), patch("backend.ai.OpenAI") as client:
+            client.return_value.chat.completions.create.return_value = response
+            checks = review_handoff_nvidia({"need": "Ускорить обработку запросов"})
+        self.assertEqual(len(checks), 5)
+        with connect() as db:
+            row = db.execute("SELECT provider, model, input_tokens, output_tokens, estimated_cost_usd FROM ai_usage").fetchone()
+        self.assertEqual(row["provider"], "nvidia")
+        self.assertEqual(row["input_tokens"], 180)
+        self.assertEqual(row["output_tokens"], 75)
+        self.assertIsNone(row["estimated_cost_usd"])
 
 
 if __name__ == "__main__":

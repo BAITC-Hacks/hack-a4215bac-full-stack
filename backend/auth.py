@@ -63,7 +63,7 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
 
 
 def require_role(user: dict, role: str):
-    if user["role"] != role:
+    if user["role"] != role and not (role == "business" and user["role"] == "admin"):
         raise HTTPException(403, "Недостаточно прав для этого действия")
 
 
