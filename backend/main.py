@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
-from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions, review_handoff, review_handoff_nvidia
+from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions, review_handoff, generate_test_scenarios
 from .auth import current_user, hash_password, issue_session, require_owner, require_role, user_with_team, verify_password
 from .compiler import EXTRAS, handoff_rules
 from .domain import FIELDS, enrich_task, valid_value
@@ -98,6 +98,10 @@ class RolePayload(BaseModel):
     role: str
 
 
+class ScenarioDecision(BaseModel):
+    confirmed: bool
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -144,6 +148,9 @@ def visible_task(task: dict, user: dict) -> dict:
     result["ai_evidence"] = {}
     result["field_meta"] = {key: meta for key, meta in task["field_meta"].items()
                             if task["confirmed"].get(key) or task["extra_confirmed"].get(key)}
+    lab = task.get("test_lab_result")
+    result["test_lab_result"] = ({**lab, "items": [item for item in lab["items"] if item["confirmed"]]}
+                                 if lab and lab.get("version") == task["pack_version"] else None)
     return result
 
 
@@ -304,8 +311,9 @@ def save_answer(task_id: str, payload: AnswerPayload, user: dict = Depends(curre
         task["field_meta"][payload.field] = {"source": "answer", "answer_id": answer_id, "updated_at": now()}
         task["pack_version"] = next_version(task["pack_version"], enrich_task(task)["readiness"]["score"])
         task["handoff_result"] = None
+        task["test_lab_result"] = None
         db.execute("""UPDATE tasks SET fields = ?, confirmed = ?, ai_evidence = ?, field_meta = ?,
-                   pack_version = ?, handoff_result = NULL, updated_at = ? WHERE id = ?""",
+                   pack_version = ?, handoff_result = NULL, test_lab_result = NULL, updated_at = ? WHERE id = ?""",
                    (json.dumps(task["fields"], ensure_ascii=False), json.dumps(task["confirmed"]),
                     json.dumps(task["ai_evidence"], ensure_ascii=False), json.dumps(task["field_meta"], ensure_ascii=False),
                     task["pack_version"], now(), task_id))
@@ -394,14 +402,16 @@ def update_task(task_id: str, payload: TaskPatch, user: dict = Depends(current_u
             task["pack_version"] = next_version(task["pack_version"], enrich_task(task)["readiness"]["score"])
         if changed:
             task["handoff_result"] = None
+            task["test_lab_result"] = None
         db.execute("""UPDATE tasks SET title = ?, category = ?, fields = ?, confirmed = ?, ai_evidence = ?,
-                   extras = ?, extra_confirmed = ?, field_meta = ?, pack_version = ?, handoff_result = ?,
+                   extras = ?, extra_confirmed = ?, field_meta = ?, pack_version = ?, handoff_result = ?, test_lab_result = ?,
                    deadline = ?, industry = ?, updated_at = ? WHERE id = ?""",
                    (task["title"], task["category"], json.dumps(task["fields"], ensure_ascii=False),
                     json.dumps(task["confirmed"]), json.dumps(task["ai_evidence"], ensure_ascii=False),
                     json.dumps(task["extras"], ensure_ascii=False), json.dumps(task["extra_confirmed"]),
                     json.dumps(task["field_meta"], ensure_ascii=False), task["pack_version"],
-                    json.dumps(task["handoff_result"], ensure_ascii=False), task["deadline"], task["industry"], now(), task_id))
+                    json.dumps(task["handoff_result"], ensure_ascii=False), json.dumps(task["test_lab_result"], ensure_ascii=False),
+                    task["deadline"], task["industry"], now(), task_id))
         return enrich_task(task)
 
 
@@ -411,29 +421,23 @@ def run_handoff(task_id: str, user: dict = Depends(current_user)):
         task = get_task_or_404(db, task_id)
         require_owner(user, task)
         result = handoff_rules(task)
-        if os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("NVIDIA_API_KEY", "").strip():
+        if os.getenv("OPENAI_API_KEY", "").strip():
             from .compiler import confirmed, value_of
 
             card = {key: value_of(task, key) for key in list(FIELDS) + list(EXTRAS) + ["deadline"]
                     if confirmed(task, key)}
             reviewers = []
-            for provider, enabled, reviewer in (
-                ("OpenAI", os.getenv("OPENAI_API_KEY", "").strip(), review_handoff),
-                ("NVIDIA", os.getenv("NVIDIA_API_KEY", "").strip(), review_handoff_nvidia),
-            ):
-                if not enabled:
-                    continue
-                try:
-                    ai_checks = reviewer(card, user["id"], task_id)
-                    reviewers.append(provider)
-                    for check in result["checks"]:
-                        ai_check = ai_checks[check["id"]]
-                        if check["passed"] and not ai_check["passed"]:
-                            check["passed"] = False
-                            check["explanation"] = f"{provider}: {ai_check['explanation']}"
-                            check["consequence"] = "Формулировку можно трактовать по-разному."
-                except (AIUnavailable, AIServiceError, ValueError):
-                    continue
+            try:
+                ai_checks = review_handoff(card, user["id"], task_id)
+                reviewers.append("OpenAI")
+                for check in result["checks"]:
+                    ai_check = ai_checks[check["id"]]
+                    if check["passed"] and not ai_check["passed"]:
+                        check["passed"] = False
+                        check["explanation"] = f"OpenAI: {ai_check['explanation']}"
+                        check["consequence"] = "Формулировку можно трактовать по-разному."
+            except (AIUnavailable, AIServiceError, ValueError):
+                pass
             result["passed"] = sum(item["passed"] for item in result["checks"])
             result["mode"] = "+".join(reviewers).lower() if reviewers else "rules"
             result["notice"] = (f"Проверка по правилам и независимая рецензия: {', '.join(reviewers)}. Это не прогноз успеха." if reviewers
@@ -442,6 +446,38 @@ def run_handoff(task_id: str, user: dict = Depends(current_user)):
         result["checked_at"] = now()
         task["handoff_result"] = result
         db.execute("UPDATE tasks SET handoff_result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), task_id))
+        return result
+
+
+@app.post("/api/tasks/{task_id}/test-lab")
+def run_test_lab(task_id: str, user: dict = Depends(current_user)):
+    with connect() as db:
+        task = get_task_or_404(db, task_id)
+        require_owner(user, task)
+        from .compiler import confirmed, value_of
+        card = {key: value_of(task, key) for key in list(FIELDS) + list(EXTRAS) + ["deadline"]
+                if confirmed(task, key)}
+        if not card.get("need") or not card.get("outcome"):
+            raise HTTPException(422, "Для сценариев подтвердите проблему и ожидаемый результат в Task Pack")
+        items = ai_or_http(generate_test_scenarios, card, user["id"], task_id)
+        result = {"version": task["pack_version"], "generated_at": now(), "items": items}
+        db.execute("UPDATE tasks SET test_lab_result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), task_id))
+        return result
+
+
+@app.patch("/api/tasks/{task_id}/test-lab/{kind}")
+def confirm_test_scenario(task_id: str, kind: str, payload: ScenarioDecision, user: dict = Depends(current_user)):
+    with connect() as db:
+        task = get_task_or_404(db, task_id)
+        require_owner(user, task)
+        result = task.get("test_lab_result")
+        if not result or result.get("version") != task["pack_version"]:
+            raise HTTPException(409, "Сначала создайте сценарии для текущей версии Task Pack")
+        item = next((item for item in result["items"] if item["kind"] == kind), None)
+        if item is None:
+            raise HTTPException(404, "Сценарий не найден")
+        item["confirmed"] = payload.confirmed
+        db.execute("UPDATE tasks SET test_lab_result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), task_id))
         return result
 
 

@@ -35,6 +35,7 @@ const focusKey = ref('')
 const questionIndex = ref(0)
 const answer = ref('')
 const busy = ref(false)
+const labBusy = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const toast = ref('')
@@ -354,6 +355,25 @@ async function runHandoff() {
   finally { busy.value = false }
 }
 
+async function runTestLab() {
+  if (!await saveDraft()) return
+  labBusy.value = true
+  try {
+    draft.value = { ...draft.value, test_lab_result: await api(`/api/tasks/${draft.value.id}/test-lab`, { method: 'POST' }) }
+    notify('Три сценария готовы. Проверьте каждый перед публикацией для команд.')
+  } catch (error) { notify(explain(error)) }
+  finally { labBusy.value = false }
+}
+
+async function confirmTestScenario(kind, confirmed) {
+  labBusy.value = true
+  try {
+    draft.value = { ...draft.value, test_lab_result: await api(`/api/tasks/${draft.value.id}/test-lab/${kind}`, { method: 'PATCH', body: { confirmed } }) }
+    notify(confirmed ? 'Сценарий подтверждён и будет виден командам.' : 'Сценарий скрыт от команд.')
+  } catch (error) { notify(explain(error)) }
+  finally { labBusy.value = false }
+}
+
 async function focusField(key) {
   focusKey.value = key
   phase.value = fields.some((item) => item.key === key) ? 'review' : 'pack'
@@ -415,10 +435,10 @@ async function saveProfile() {
 </script>
 
 <template>
-  <div v-if="booting" class="boot-screen"><div class="loading-mark"><ForgeIcon name="spark" size="25" /></div><strong>FORGE</strong></div>
+  <div v-if="booting" class="boot-screen"><div class="loading-mark"><img src="/forge-mark.svg" alt="" /></div><strong>FORGE</strong></div>
   <div v-else-if="!user && !authStarted" class="landing-shell">
     <header class="landing-nav">
-      <a class="landing-logo" href="#top" aria-label="FORGE — в начало"><span class="brand-mark">F<span>.</span></span><b>FORGE</b></a>
+      <a class="landing-logo" href="#top" aria-label="FORGE — в начало"><span class="brand-mark"><img src="/forge-mark.svg" alt="" /></span><b>FORGE</b></a>
       <nav aria-label="Разделы страницы"><a href="#how">Как работает</a><a href="#roles">Для кого</a><a href="#principles">Принципы</a></nav>
       <div class="landing-nav-actions"><button class="landing-login" @click="beginAuth('login')">Войти</button><button class="button button-orange" @click="beginAuth('register')">Начать работу <ForgeIcon name="arrow-up-right" size="15" /></button></div>
     </header>
@@ -426,7 +446,7 @@ async function saveProfile() {
       <section class="landing-hero">
         <div class="landing-hero-copy"><span class="eyebrow">ПРАКТИЧЕСКИЕ ЗАДАЧИ · AI SANA</span><h1>Хорошее решение<br>начинается с <em>ясной задачи.</em></h1><p>FORGE помогает бизнесу описать реальную проблему и передать её команде с понятными требованиями, материалами и критериями результата.</p><div class="landing-hero-actions"><button class="button button-orange" @click="beginAuth('register')">Создать аккаунт <ForgeIcon name="arrow-up-right" size="15" /></button><a class="landing-text-link" href="#how">Посмотреть, как это устроено <ForgeIcon name="arrow-down" size="14" /></a></div><div class="landing-proof"><span class="proof-mark"><ForgeIcon name="spark" size="15" /></span><span>От первого описания до готового к передаче Task Pack</span></div></div>
         <div class="landing-hero-visual" role="img" aria-label="Три этапа — проблема, Task Pack и команда — движутся вокруг логотипа FORGE">
-          <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div><div class="visual-core"><span>F<span class="core-dot">.</span></span><small>FORGE<br>ПОНЯТНЫЙ СТАРТ</small></div>
+          <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div><div class="visual-core"><img class="orbit-logo" src="/forge-mark.svg" alt="" /><small>FORGE<br>ПОНЯТНЫЙ СТАРТ</small></div>
           <div class="orbit-track orbit-track-one"><div class="orbit-anchor"><div class="visual-node"><i>01</i><span>Проблема</span><b>Что нужно изменить?</b></div></div></div><div class="orbit-track orbit-track-two"><div class="orbit-anchor"><div class="visual-node"><i>02</i><span>Task Pack</span><b>Контекст · данные · успех</b></div></div></div><div class="orbit-track orbit-track-three"><div class="orbit-anchor"><div class="visual-node"><i>03</i><span>Команда</span><b>План и предложение</b></div></div></div><div class="visual-caption"><span class="live-dot"></span> ПОНЯТНЫЙ МАРШРУТ РАБОТЫ</div>
         </div>
         <div class="landing-scroll-note">ПРОКРУТИТЕ, ЧТОБЫ УЗНАТЬ БОЛЬШЕ <ForgeIcon name="arrow-down" size="13" /></div>
@@ -449,10 +469,10 @@ async function saveProfile() {
 
       <section class="landing-cta"><div><span class="eyebrow">ГОТОВЫ НАЧАТЬ?</span><h2>Сделайте следующий шаг<br><em>понятным для всех.</em></h2><p>Создайте аккаунт и выберите, с какой стороны вы хотите работать с задачами.</p></div><button class="button button-orange" @click="beginAuth('register')">Создать аккаунт в FORGE <ForgeIcon name="arrow-up-right" size="15" /></button><span class="cta-orbit cta-orbit-a"></span><span class="cta-orbit cta-orbit-b"></span></section>
     </main>
-    <footer class="landing-footer"><a class="landing-logo" href="#top"><span class="brand-mark">F<span>.</span></span><b>FORGE</b></a><span>AI Sana · Практические задачи для совместной работы</span><button @click="beginAuth('login')">Уже есть аккаунт? Войти <ForgeIcon name="arrow-up-right" size="14" /></button></footer>
+    <footer class="landing-footer"><a class="landing-logo" href="#top"><span class="brand-mark"><img src="/forge-mark.svg" alt="" /></span><b>FORGE</b></a><span>AI Sana · Практические задачи для совместной работы</span><button @click="beginAuth('login')">Уже есть аккаунт? Войти <ForgeIcon name="arrow-up-right" size="14" /></button></footer>
   </div>
   <div v-else-if="!user" class="auth-shell">
-    <div class="auth-brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div><button class="auth-back" @click="authStarted = false"><ForgeIcon name="arrow-left" size="15" /> На главную</button>
+    <div class="auth-brand"><div class="brand-mark"><img src="/forge-mark.svg" alt="" /></div><span>FORGE</span></div><button class="auth-back" @click="authStarted = false"><ForgeIcon name="arrow-left" size="15" /> На главную</button>
     <div class="auth-layout">
       <section class="auth-story"><span class="eyebrow">AI SANA · ПРАКТИЧЕСКИЕ ЗАДАНИЯ</span><h1>От сырой идеи к задаче, готовой для команды.</h1><p>FORGE проверяет полноту постановки, собирает Task Pack и помогает передать работу студенческой команде без лишней неопределённости.</p></section>
       <section class="auth-card"><span class="eyebrow accent-text">ДОБРО ПОЖАЛОВАТЬ</span><h2>{{ authMode === 'login' ? 'Войти в FORGE' : 'Создать аккаунт' }}</h2><p>{{ authMode === 'login' ? 'Продолжите работу со своими задачами и откликами.' : 'Выберите свою роль и начните работать с реальными проектами.' }}</p><div class="auth-switch"><button :class="{ active: authMode === 'login' }" @click="authMode = 'login'">Вход</button><button :class="{ active: authMode === 'register' }" @click="authMode = 'register'">Регистрация</button></div>
@@ -462,7 +482,7 @@ async function saveProfile() {
   </div>
   <div v-else class="app-shell" :class="{ 'admin-session': isAdmin }">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div>
+      <div class="brand"><div class="brand-mark"><img src="/forge-mark.svg" alt="" /></div><span>FORGE</span></div>
       <div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <nav aria-label="Основная навигация">
         <button v-if="isBusiness" class="nav-item" :class="{ active: view === 'workspace' }" @click="view = 'workspace'"><span class="nav-icon"><ForgeIcon name="folder" /></span> Обзор задач <span class="nav-count">{{ workspaceTasks.length }}</span></button>
@@ -476,7 +496,7 @@ async function saveProfile() {
     </aside>
 
     <main class="main">
-      <header class="topbar"><div class="mobile-brand"><div class="brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div></div><span class="topbar-path">FORGE <span>/</span> {{ view === 'admin' ? 'Управление' : view === 'workspace' ? 'Обзор задач' : view === 'create' ? 'Создание задачи' : view === 'catalog' ? 'Каталог задач' : view === 'profile' ? 'Профиль команды' : 'Предложения' }}</span><div class="topbar-right"><span class="topbar-user">{{ user.name }} · {{ user.organization }}</span><button class="logout-button" @click="logout">Выйти</button></div></header>
+      <header class="topbar"><div class="mobile-brand"><div class="brand"><div class="brand-mark"><img src="/forge-mark.svg" alt="" /></div><span>FORGE</span></div></div><span class="topbar-path">FORGE <span>/</span> {{ view === 'admin' ? 'Управление' : view === 'workspace' ? 'Обзор задач' : view === 'create' ? 'Создание задачи' : view === 'catalog' ? 'Каталог задач' : view === 'profile' ? 'Профиль команды' : 'Предложения' }}</span><div class="topbar-right"><span class="topbar-user">{{ user.name }} · {{ user.organization }}</span><button class="logout-button" @click="logout">Выйти</button></div></header>
       <div v-if="!isAdmin && bootstrapStatus?.available" class="bootstrap-banner"><div><strong>Первый администратор FORGE</strong><span>{{ bootstrapStatus.configured ? 'Введите секрет из .env, чтобы открыть панель управления.' : 'Задайте ADMIN_BOOTSTRAP_TOKEN в .env и перезапустите API.' }}</span></div><form v-if="bootstrapStatus.configured" @submit.prevent="bootstrapAdmin"><input v-model="bootstrapSecret" type="password" autocomplete="off" aria-label="Секрет администратора" placeholder="Секрет администратора" /><button class="button button-dark" :disabled="adminBusy" type="submit">Назначить себя <ForgeIcon name="arrow-right" size="14" /></button></form></div>
 
       <div v-if="loading" class="page loading-page"><div class="loading-state"><div class="loading-mark"><ForgeIcon name="spark" size="25" /></div><strong>Загружаем FORGE...</strong></div></div>
@@ -513,13 +533,14 @@ async function saveProfile() {
           </section><div class="right-rail"><ScorePanel :task="draft" @handoff="runHandoff" /><ReadinessCompiler :task="draft" compact @fix="focusField" /></div>
         </div>
         <div v-else-if="phase === 'pack' && draft" class="pack-page"><div class="pack-topline"><button class="back-link" @click="phase = 'review'"><ForgeIcon name="arrow-left" size="14" /> Вернуться к Blueprint</button><span class="build-pill" :class="`build-${draft.build?.status}`">{{ draft.build?.errors }} ошибок · {{ draft.build?.warnings }} предупреждений</span></div><TaskPackEditor :task="draft" :focus-key="focusKey" @edit="editPackField" @confirm="confirmPackField" @accept="acceptResponsibility" @save="saveDraft" @handoff="runHandoff" /></div>
-        <div v-else-if="phase === 'handoff' && draft" class="handoff-page"><button class="back-link" @click="phase = 'pack'"><ForgeIcon name="arrow-left" size="14" /> Вернуться к Task Pack</button><HandoffPanel :task="draft" :busy="busy" @run="runHandoff" @fix="focusField" @publish="publishTask" /></div>
+        <div v-else-if="phase === 'handoff' && draft" class="handoff-page"><button class="back-link" @click="phase = 'pack'"><ForgeIcon name="arrow-left" size="14" /> Вернуться к Task Pack</button><HandoffPanel :task="draft" :busy="busy" :lab-busy="labBusy" @run="runHandoff" @test-lab="runTestLab" @scenario="confirmTestScenario" @fix="focusField" @publish="publishTask" /></div>
       </div>
 
       <div v-else-if="view === 'catalog'" class="page catalog-page"><div class="page-heading catalog-heading"><div><span class="eyebrow accent-text">КАТАЛОГ ЗАДАЧ</span><h1>Реальные задачи для команд.</h1><p>Все опубликованные задачи видны независимо от рейтинга. Перед откликом изучите Task Pack и открытые предупреждения.</p></div><div class="catalog-total"><strong>{{ published.length }}</strong><span>задач в каталоге</span></div></div>
         <div v-if="selectedTask" class="detail-layout"><div class="detail-main"><button class="back-link" @click="selectedTaskId = null"><ForgeIcon name="arrow-left" size="14" /> Назад к каталогу</button><div class="detail-card"><div class="detail-head"><span class="topic-label">{{ selectedTask.industry || selectedTask.category }} · {{ selectedTask.owner }}</span><span class="status" :class="`status-${toneFor(selectedTask)}`"><span class="status-dot" />{{ scoreTask(selectedTask).level }}</span></div><h2>{{ selectedTask.title }}</h2><div class="detail-score"><strong>{{ scoreTask(selectedTask).score }}</strong><span>/ 100 готовность к работе · {{ selectedTask.task_pack?.version }}</span></div><div class="detail-signals"><span>{{ selectedTask.build?.errors }} критических пробелов</span><span>{{ selectedTask.build?.warnings }} предупреждений</span><span>Handoff Test · {{ selectedTask.handoff_result?.passed ?? '—' }}/5</span><span>{{ selectedTask.confirmed?.data ? 'Данные подтверждены' : 'Данные требуют уточнения' }}</span></div><div class="public-pack"><section v-for="section in selectedTask.task_pack?.sections" :key="section.name"><h3>{{ section.name }}</h3><div v-for="item in section.items" :key="item.key" class="public-pack-row"><strong>{{ item.label }}</strong><p>{{ item.confirmed ? item.value : 'Требуется подтверждение бизнеса' }}</p></div></section></div><div v-if="selectedTask.build?.errors || selectedTask.build?.warnings" class="public-warnings"><h3>Открытые замечания</h3><p v-for="item in selectedTask.build.diagnostics.filter((entry) => entry.severity !== 'passed')" :key="item.code"><strong>{{ item.code }} · {{ item.title }}</strong> — {{ item.consequence }}</p></div></div></div>
           <aside v-if="!isBusiness" class="proposal-card"><span class="eyebrow">ОТКЛИК КОМАНДЫ</span><h2>Предложите решение</h2><p><strong>{{ user.team?.name }}</strong> · {{ user.team?.skills.join(', ') }}. Выбор команды остаётся за бизнесом.</p><form @submit.prevent="submitProposal"><label>Идея решения<textarea v-model="proposal.idea" required minlength="12" placeholder="Как вы решите задачу?" rows="3" /></label><label>План работы<textarea v-model="proposal.plan" required minlength="12" placeholder="Этапы работы и проверки" rows="3" /></label><label>Срок<input v-model="proposal.deadline" required placeholder="Например, 14 дней" /></label><label>Ссылка на прототип<input v-model="proposal.link" type="url" placeholder="https://example.com/prototype" /></label><label>Вопросы бизнесу<textarea v-model="proposal.questions" placeholder="Что ещё необходимо уточнить?" rows="2" /></label><button class="button button-orange full" type="submit">Отправить предложение <ForgeIcon name="arrow-right" size="15" /></button></form></aside>
           <aside v-else class="proposal-card"><span class="eyebrow">ЗАДАЧА БИЗНЕСА</span><h2>Отклики команд</h2><p>Предложения доступны владельцу задачи в личном кабинете.</p><button v-if="selectedTask.owner_id === user.id" class="button button-dark full" @click="inboxTaskId = selectedTask.id; view = 'inbox'">Смотреть предложения <ForgeIcon name="arrow-right" size="14" /></button></aside>
+          <section v-if="selectedTask.test_lab_result?.items?.length" class="public-test-lab"><span class="eyebrow">ТЕСТ-ЛАБОРАТОРИЯ · {{ selectedTask.test_lab_result.version }}</span><h2>Сценарии проверки</h2><p>Проверочные гипотезы, подтверждённые автором задачи. Открытые вопросы нужно уточнить до приёмки.</p><div class="test-lab-grid"><article v-for="item in selectedTask.test_lab_result.items" :key="item.kind"><span>{{ { normal: 'ОСНОВНОЙ', edge: 'ПОГРАНИЧНЫЙ', failure: 'СБОЙНЫЙ' }[item.kind] }}</span><h3>{{ item.title }}</h3><p><b>Шаги:</b> {{ item.steps }}</p><p><b>Ожидается:</b> {{ item.expected }}</p><small>Уточнить: {{ item.open_question }}</small></article></div></section>
         </div>
         <template v-else><div class="filters catalog-filters"><input v-model="query" type="search" aria-label="Поиск задач" placeholder="Поиск по названию, компании, описанию..." /><select v-model="topicFilter" aria-label="Фильтр по теме"><option>Все темы</option><option v-for="category in categories" :key="category">{{ category }}</option></select><select v-model="levelFilter" aria-label="Фильтр по готовности"><option>Любой уровень</option><option v-for="level in levels" :key="level">{{ level }}</option></select><select v-model="dataFilter" aria-label="Фильтр по данным"><option>Любые данные</option><option>Данные подтверждены</option><option>Данные не подтверждены</option></select><select v-model="deadlineFilter" aria-label="Фильтр по сроку"><option>Любой срок</option><option>Срок указан</option><option>Срок не указан</option></select><span class="filter-result">Показано {{ filtered.length }} из {{ published.length }}</span></div><div class="task-grid"><button v-for="task in filtered" :key="task.id" class="task-card" @click="selectedTaskId = task.id"><div class="task-card-top"><span class="topic-label">{{ task.industry || task.category }} · {{ task.owner }}</span><span class="task-card-arrow"><ForgeIcon name="arrow-up-right" size="18" /></span></div><h2>{{ task.title }}</h2><p>{{ task.fields.need || task.fields.context }}</p><div class="catalog-meta"><span><ForgeIcon v-if="task.confirmed?.data" name="check" size="12" /> {{ task.confirmed?.data ? 'Данные подтверждены' : 'Данные требуют уточнения' }}</span><span>{{ task.deadline || 'Срок не указан' }}</span><span>{{ task.handoff_result ? `Handoff ${task.handoff_result.passed}/5` : 'Handoff не проведён' }}</span><span>{{ task.build?.errors }} ошибок · {{ task.build?.warnings }} предупреждений</span><span>{{ task.proposal_count || 0 }} откликов</span></div><div class="task-card-bottom"><div><strong>{{ scoreTask(task).score }}</strong><span>/ 100 готовность</span></div><span class="status" :class="`status-${toneFor(task)}`"><span class="status-dot" />{{ scoreTask(task).level }}</span></div></button></div><div v-if="!filtered.length" class="empty-state">{{ published.length ? 'По выбранным фильтрам задач нет. Измените поиск или параметры.' : 'Пока нет опубликованных задач. Бизнес может создать первую задачу в конструкторе.' }}</div></template>
       </div>

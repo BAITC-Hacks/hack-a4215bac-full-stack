@@ -1,4 +1,4 @@
-"""OpenAI drafting and optional NVIDIA NIM second opinion, with usage records."""
+"""OpenAI drafting and NVIDIA NIM test-scenario generation, with usage records."""
 
 import json
 import logging
@@ -56,6 +56,18 @@ class HandoffItem(BaseModel):
 
 class HandoffReview(BaseModel):
     checks: list[HandoffItem]
+
+
+class TestScenario(BaseModel):
+    kind: Literal["normal", "edge", "failure"]
+    title: str
+    steps: str
+    expected: str
+    open_question: str
+
+
+class TestScenarios(BaseModel):
+    items: list[TestScenario]
 
 
 def validate_questions(questions: list[Question]) -> list[dict]:
@@ -207,8 +219,8 @@ def review_handoff(confirmed_card: dict, actor_id: str | None = None, task_id: s
             for item in result.checks}
 
 
-def review_handoff_nvidia(confirmed_card: dict, actor_id: str | None = None, task_id: str | None = None) -> dict:
-    """Optional second opinion from NVIDIA NIM, using only confirmed task facts."""
+def generate_test_scenarios(confirmed_card: dict, actor_id: str | None = None, task_id: str | None = None) -> list[dict]:
+    """Draft three distinct acceptance tests from confirmed facts only."""
     api_key = os.getenv("NVIDIA_API_KEY", "").strip()
     if not api_key:
         raise AIUnavailable("NVIDIA_API_KEY не задан")
@@ -217,23 +229,28 @@ def review_handoff_nvidia(confirmed_card: dict, actor_id: str | None = None, tas
     response = None
     try:
         response = client.chat.completions.create(
-            model=model, temperature=0.2, max_tokens=750,
+            model=model, temperature=0.25, max_tokens=1100,
             messages=[
-                {"role": "system", "content": "Ты второй независимый рецензент бизнес-задачи. Ответь только JSON-объектом с ключом checks: массив из ровно пяти объектов id, passed, explanation. id: problem, users, data, deliverable, acceptance. Пиши объяснения на русском, не выдумывай факты. Если сведений недостаточно, passed=false."},
-                {"role": "user", "content": "Оцени, достаточно ли подтверждённых сведений для старта команды. Карточка: " + json.dumps(confirmed_card, ensure_ascii=False)},
+                {"role": "system", "content": "Ты QA-аналитик задач для хакатона. Верни только JSON-объект {\"items\":[...]}. Ровно три сценария с уникальными kind: normal, edge, failure. У каждого title, steps, expected, open_question — короткие строки на русском. Это проверочные гипотезы, не подтверждённые факты. Не выдумывай метрики, точные пороги, персональные данные, доступ к системам или обещания бизнеса. Если для ожидаемого результата не хватает условия, явно напиши об этом в open_question и expected. Не копируй одно и то же в три сценария."},
+                {"role": "user", "content": "Предложи сценарии проверки для подтверждённой карточки: " + json.dumps(confirmed_card, ensure_ascii=False)},
             ],
         )
         content = response.choices[0].message.content or ""
         start, end = content.find("{"), content.rfind("}")
         if start < 0 or end <= start:
             raise ValueError("NVIDIA returned no JSON")
-        result = HandoffReview.model_validate_json(content[start:end + 1])
-        expected = {"problem", "users", "data", "deliverable", "acceptance"}
-        if len(result.checks) != 5 or {item.id for item in result.checks} != expected:
-            raise ValueError("NVIDIA returned incomplete checks")
-        record_usage("handoff_second_opinion", model, "completed", response, actor_id, task_id, "nvidia")
-        return {item.id: {"passed": item.passed, "explanation": item.explanation.strip()[:500]} for item in result.checks}
+        result = TestScenarios.model_validate_json(content[start:end + 1])
+        if len(result.items) != 3 or {item.kind for item in result.items} != {"normal", "edge", "failure"}:
+            raise ValueError("NVIDIA returned incomplete scenarios")
+        items = []
+        for item in result.items:
+            values = {key: getattr(item, key).strip() for key in ("title", "steps", "expected", "open_question")}
+            if any(not value or len(value) > 700 for value in values.values()):
+                raise ValueError("NVIDIA returned invalid scenario text")
+            items.append({"kind": item.kind, **values, "confirmed": False})
+        record_usage("test_lab", model, "completed", response, actor_id, task_id, "nvidia")
+        return sorted(items, key=lambda item: ("normal", "edge", "failure").index(item["kind"]))
     except Exception as exc:
-        record_usage("handoff_second_opinion", model, "failed", response, actor_id, task_id, "nvidia")
+        record_usage("test_lab", model, "failed", response, actor_id, task_id, "nvidia")
         logger.warning("NVIDIA NIM request failed: %s", type(exc).__name__)
-        raise AIServiceError("Независимая NVIDIA-проверка сейчас недоступна.") from exc
+        raise AIServiceError("Тест-лаборатория NVIDIA сейчас недоступна.") from exc

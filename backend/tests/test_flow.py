@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions, parse_response, review_handoff_nvidia, usage_cost
+from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions, parse_response, generate_test_scenarios, usage_cost
 from backend.compiler import compile_readiness, handoff_rules
 from backend.domain import FIELDS
 from backend.main import app
@@ -269,23 +269,60 @@ class ForgeFlowTest(unittest.TestCase):
         sent = self.client.post("/api/proposals", headers=th, json={"task_id": other["id"], "idea": "Сделаем маршрутизацию по темам.", "plan": "Соберём данные и протестируем модель.", "deadline": "10 дней"}).json()
         self.assertEqual(len(self.client.get("/api/proposals", headers=ah).json()), 1)
         self.assertEqual(self.client.patch(f"/api/proposals/{sent['id']}/decision", headers=ah, json={"status": "accepted"}).status_code, 403)
-        checks = {key: {"passed": False, "explanation": "Нужны детали."} for key in ["problem", "users", "data", "deliverable", "acceptance"]}
-        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-nvidia-key"}), patch("backend.main.review_handoff_nvidia", return_value=checks) as reviewer:
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-nvidia-key"}), patch("backend.main.generate_test_scenarios") as generator:
             result = self.client.post(f"/api/tasks/{own.json()['id']}/handoff", headers=ah)
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()["mode"], "nvidia")
-        reviewer.assert_called_once()
+        self.assertEqual(result.json()["mode"], "rules")
+        generator.assert_not_called()
+
+    def test_test_lab_confirmation_and_version_invalidation(self):
+        business = self.client.post("/api/auth/register", json={
+            "email": "lab-owner@test.org", "password": "very-secure-password", "name": "Алия",
+            "organization": "Qolda Service", "role": "business", "skills": [],
+        }).json()
+        team = self.client.post("/api/auth/register", json={
+            "email": "lab-team@test.org", "password": "very-secure-password", "name": "Дана",
+            "organization": "Nova Lab", "role": "team", "skills": ["Python"],
+        }).json()
+        bh = {"Authorization": f"Bearer {business['token']}"}
+        th = {"Authorization": f"Bearer {team['token']}"}
+        task = self.client.post("/api/tasks", headers=bh, json={"raw": "Нужно ускорить сортировку обращений клиентов и уменьшить время ожидания."}).json()
+        task_id = task["id"]
+        self.assertEqual(self.client.post(f"/api/tasks/{task_id}/test-lab", headers=bh).status_code, 422)
+        patched = self.client.patch(f"/api/tasks/{task_id}", headers=bh, json={
+            "fields": {"need": "Ускорить сортировку обращений клиентов.", "outcome": "Рабочий прототип сортировки обращений для операторов."},
+            "confirmed": {"need": True, "outcome": True},
+        })
+        self.assertEqual(patched.status_code, 200)
+        examples = [{"kind": kind, "title": f"Сценарий {kind}", "steps": "Проверить прототип на обращении.",
+                     "expected": "Показан вариант маршрутизации.", "open_question": "Какой порог точности нужен?", "confirmed": False}
+                    for kind in ("normal", "edge", "failure")]
+        with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-key"}), patch("backend.main.generate_test_scenarios", return_value=examples) as generator:
+            generated = self.client.post(f"/api/tasks/{task_id}/test-lab", headers=bh)
+        self.assertEqual(generated.status_code, 200)
+        self.assertEqual(len(generated.json()["items"]), 3)
+        self.assertEqual(generator.call_args.args[0]["need"], "Ускорить сортировку обращений клиентов.")
+        self.assertEqual(self.client.patch(f"/api/tasks/{task_id}/test-lab/normal", headers=th, json={"confirmed": True}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/tasks/{task_id}/test-lab/normal", headers=bh, json={"confirmed": True}).status_code, 200)
+        self.client.post(f"/api/tasks/{task_id}/publish", headers=bh)
+        public = self.client.get(f"/api/tasks/{task_id}", headers=th).json()
+        self.assertEqual([item["kind"] for item in public["test_lab_result"]["items"]], ["normal"])
+        changed = self.client.patch(f"/api/tasks/{task_id}", headers=bh, json={"fields": {"need": "Нужна другая маршрутизация обращений клиентов."}})
+        self.assertIsNone(changed.json()["test_lab_result"])
+        self.assertIsNone(self.client.get(f"/api/tasks/{task_id}", headers=th).json()["test_lab_result"])
 
     def test_nvidia_usage_records_tokens_without_inventing_cost(self):
-        content = '{"checks":[' + ','.join(
-            '{"id":"' + key + '","passed":false,"explanation":"Нужны уточнения"}'
-            for key in ["problem", "users", "data", "deliverable", "acceptance"]) + ']}'
+        content = '{"items":[' + ','.join(
+            '{"kind":"' + kind + '","title":"Сценарий","steps":"Проверить ввод",'
+            '"expected":"Получить результат","open_question":"Что считать успехом?"}'
+            for kind in ["normal", "edge", "failure"]) + ']}'
         response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
                                    usage=SimpleNamespace(prompt_tokens=180, completion_tokens=75))
         with patch.dict(os.environ, {"NVIDIA_API_KEY": "test-nvidia-key"}), patch("backend.ai.OpenAI") as client:
             client.return_value.chat.completions.create.return_value = response
-            checks = review_handoff_nvidia({"need": "Ускорить обработку запросов"})
-        self.assertEqual(len(checks), 5)
+            scenarios = generate_test_scenarios({"need": "Ускорить обработку запросов"})
+        self.assertEqual(len(scenarios), 3)
+        self.assertFalse(scenarios[0]["confirmed"])
         with connect() as db:
             row = db.execute("SELECT provider, model, input_tokens, output_tokens, estimated_cost_usd FROM ai_usage").fetchone()
         self.assertEqual(row["provider"], "nvidia")

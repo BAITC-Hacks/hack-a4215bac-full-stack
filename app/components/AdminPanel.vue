@@ -7,7 +7,7 @@ const tab = ref('overview')
 const search = ref('')
 const people = computed(() => props.overview.users.filter((person) => `${person.name} ${person.email} ${person.organization}`.toLowerCase().includes(search.value.toLowerCase())))
 const roles = { admin: 'Администратор', business: 'Бизнес', team: 'Команда' }
-const operation = { analysis: 'Разбор задачи', interview: 'AI-интервью', handoff: 'Handoff Test', handoff_second_opinion: 'Второе мнение' }
+const operation = { analysis: 'Разбор задачи', interview: 'AI-интервью', handoff: 'Handoff Test', test_lab: 'Тест-лаборатория' }
 function date(value) { return value ? new Date(value).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—' }
 function money(value) { return value == null ? '—' : `$${Number(value).toFixed(5)}` }
 function requestRole(person, event) { const role = event.target.value; event.target.value = person.role; emit('role', person, role) }

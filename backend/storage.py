@@ -87,6 +87,7 @@ def init_db():
             "field_meta": "TEXT NOT NULL DEFAULT '{}'",
             "pack_version": "TEXT NOT NULL DEFAULT 'v0.1'",
             "handoff_result": "TEXT",
+            "test_lab_result": "TEXT",
             "deadline": "TEXT NOT NULL DEFAULT ''",
             "industry": "TEXT NOT NULL DEFAULT ''",
             "updated_at": "TEXT NOT NULL DEFAULT ''",
@@ -113,6 +114,7 @@ def task_from_row(row):
     value["extra_confirmed"] = json.loads(value.get("extra_confirmed") or "{}")
     value["field_meta"] = json.loads(value.get("field_meta") or "{}")
     value["handoff_result"] = json.loads(value.get("handoff_result") or "null")
+    value["test_lab_result"] = json.loads(value.get("test_lab_result") or "null")
     value["published"] = bool(value["published"])
     return value
 

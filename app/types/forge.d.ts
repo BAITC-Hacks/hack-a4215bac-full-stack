@@ -53,6 +53,7 @@ export interface ForgeTask {
   build: { status: BuildStatus; score: number; errors: number; warnings: number; diagnostics: Diagnostic[]; next_step: Diagnostic | null }
   task_pack: { version: string; sections: { name: string; items: TaskPackItem[] }[] }
   handoff_result: { passed: number; total: number; checks: HandoffCheck[]; mode: 'rules' | 'openai'; notice: string } | null
+  test_lab_result: { version: string; generated_at: string; items: { kind: 'normal' | 'edge' | 'failure'; title: string; steps: string; expected: string; open_question: string; confirmed: boolean }[] } | null
   proposal_count: number
   created_at: string
 }
