@@ -7,6 +7,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions
+from backend.compiler import compile_readiness, handoff_rules
+from backend.domain import FIELDS
 from backend.main import app
 
 
@@ -53,6 +55,9 @@ class ForgeFlowTest(unittest.TestCase):
         task = created.json()
         task_id = task["id"]
         self.assertEqual(task["readiness"]["score"], 10)
+        self.assertEqual(task["build"]["status"], "failed")
+        self.assertGreaterEqual(task["build"]["errors"], 3)
+        self.assertEqual(task["task_pack"]["version"], "v0.1")
         self.assertEqual(self.client.post(f"/api/tasks/{task_id}/analyze", headers=business_headers).status_code, 503)
         self.assertEqual(self.client.post(f"/api/tasks/{task_id}/interview", headers=business_headers).status_code, 503)
         self.assertEqual(self.client.get(f"/api/tasks/{task_id}", headers=team_headers).status_code, 403)
@@ -70,21 +75,44 @@ class ForgeFlowTest(unittest.TestCase):
         self.assertEqual(analyzed.json()["task"]["fields"]["need"], "Сократить время сортировки обращений клиентов.")
         self.assertFalse(analyzed.json()["task"]["confirmed"]["need"])
         self.assertEqual(analyzed.json()["task"]["ai_evidence"]["need"], "теряют время")
+        self.assertEqual(analyzed.json()["task"]["task_pack"]["version"], "v0.1")
+
+        answer = self.client.post(f"/api/tasks/{task_id}/answers", headers=business_headers, json={
+            "field": "users", "question": "Кто будет пользоваться будущим решением?",
+            "answer": "Операторы поддержки и руководитель смены.",
+        })
+        self.assertEqual(answer.status_code, 201)
+        self.assertEqual(answer.json()["task"]["field_meta"]["users"]["source"], "answer")
+        self.assertEqual(len(self.client.get(f"/api/tasks/{task_id}/answers", headers=business_headers).json()), 1)
+
+        pack_update = self.client.patch(f"/api/tasks/{task_id}", headers=business_headers, json={
+            "extras": {"acceptance_owner": "Руководитель контакт-центра", "data_access": "Передадим CSV через защищённую папку"},
+            "extra_confirmed": {"acceptance_owner": True, "data_access": True},
+        })
+        self.assertEqual(pack_update.status_code, 200)
+        self.assertEqual(pack_update.json()["task_pack"]["sections"][3]["items"][-2]["status"], "confirmed")
+        handoff = self.client.post(f"/api/tasks/{task_id}/handoff", headers=business_headers)
+        self.assertEqual(handoff.status_code, 200)
+        self.assertEqual(handoff.json()["total"], 5)
+        self.assertEqual(handoff.json()["mode"], "rules")
 
         updated = self.client.patch(f"/api/tasks/{task_id}", headers=business_headers, json={
             "fields": {"need": "Сократить время ручной сортировки обращений клиентов."},
             "confirmed": {"need": True},
         }).json()
-        self.assertEqual(updated["readiness"]["score"], 20)
+        self.assertEqual(updated["readiness"]["score"], 30)
         changed = self.client.patch(f"/api/tasks/{task_id}", headers=business_headers, json={
             "fields": {"need": "Снизить число ошибок при распределении обращений."}
         }).json()
-        self.assertEqual(changed["readiness"]["score"], 10)
+        self.assertEqual(changed["readiness"]["score"], 20)
         self.assertFalse(changed["confirmed"]["need"])
 
         self.assertEqual(self.client.post(f"/api/tasks/{task_id}/publish", headers=team_headers).status_code, 403)
         self.assertEqual(self.client.post(f"/api/tasks/{task_id}/publish", headers=business_headers).status_code, 200)
         self.assertIn(task_id, [item["id"] for item in self.client.get("/api/tasks", headers=team_headers).json()])
+        public_task = self.client.get(f"/api/tasks/{task_id}", headers=team_headers).json()
+        self.assertEqual(public_task["fields"]["need"], "")
+        self.assertEqual(public_task["ai_evidence"], {})
 
         sent = self.client.post("/api/proposals", headers=team_headers, json={
             "task_id": task_id,
@@ -94,6 +122,14 @@ class ForgeFlowTest(unittest.TestCase):
         })
         self.assertEqual(sent.status_code, 201)
         proposal_id = sent.json()["id"]
+        no_prototype = self.client.post("/api/proposals", headers=team_headers, json={
+            "task_id": task_id,
+            "idea": "Проверим ручную разметку и соберём альтернативный подход.",
+            "plan": "Согласуем данные, реализуем и сравним два варианта.",
+            "deadline": "21 день",
+        })
+        self.assertEqual(no_prototype.status_code, 201)
+        self.assertEqual(no_prototype.json()["link"], "")
         self.assertEqual(self.client.patch(f"/api/proposals/{proposal_id}/decision", headers=team_headers, json={"status": "accepted"}).status_code, 403)
         decision = self.client.patch(f"/api/proposals/{proposal_id}/decision", headers=business_headers, json={"status": "accepted"})
         self.assertEqual(decision.json()["status"], "accepted")
@@ -134,6 +170,29 @@ class ForgeFlowTest(unittest.TestCase):
             result = analyze_task(task)
         self.assertEqual(result["suggestions"], {"need": "Сократить время ручной сортировки."})
         self.assertEqual(result["evidence"], {"need": "теряют время"})
+
+    def test_compiler_and_handoff_fix_targets(self):
+        fields = {key: "" for key in FIELDS}
+        fields.update({
+            "context": "Операторы вручную сортируют обращения клиентов.",
+            "need": "Сократить ручную сортировку обращений.",
+            "users": "Операторы службы поддержки.",
+            "data": "Обезличенный CSV с обращениями клиентов.",
+            "outcome": "Прототип классификации и отчёт с ошибками.",
+            "success": "Проверить выгрузку CSV и ошибки классификации.",
+        })
+        task = {"fields": fields, "confirmed": {key: bool(value) for key, value in fields.items()},
+                "extras": {}, "extra_confirmed": {}, "field_meta": {}, "deadline": ""}
+        build = compile_readiness(task)
+        self.assertEqual(build["score"], 80)
+        self.assertEqual(build["status"], "failed")
+        handoff = handoff_rules(task)
+        self.assertEqual(handoff["passed"], 3)
+        self.assertEqual(next(item for item in handoff["checks"] if item["id"] == "data")["field"], "data_access")
+        self.assertEqual(next(item for item in handoff["checks"] if item["id"] == "acceptance")["field"], "acceptance_owner")
+        task["extras"] = {"data_access": "CSV через защищённую папку", "acceptance_owner": "Руководитель поддержки"}
+        task["extra_confirmed"] = {"data_access": True, "acceptance_owner": True}
+        self.assertEqual(handoff_rules(task)["passed"], 5)
 
 
 if __name__ == "__main__":

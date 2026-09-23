@@ -49,4 +49,7 @@ def readiness(fields: dict, confirmed: dict) -> dict:
 
 
 def enrich_task(task: dict) -> dict:
-    return {**task, "readiness": readiness(task["fields"], task["confirmed"])}
+    from .compiler import compile_readiness, task_pack
+
+    return {**task, "readiness": readiness(task["fields"], task["confirmed"]),
+            "build": compile_readiness(task), "task_pack": task_pack(task)}

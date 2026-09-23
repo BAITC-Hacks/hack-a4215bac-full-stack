@@ -37,16 +37,3 @@ export function scoreTask(task) {
     missing: items.filter((item) => item.earned === 0),
   }
 }
-
-export function studentChecks(task) {
-  const score = scoreTask(task)
-  const has = (group) => score.groups.find((item) => item.name === group)?.earned > 0
-  return [
-    { ok: has('Контекст и потребность'), text: 'Понятно, какую проблему нужно решить' },
-    { ok: has('Пользователи'), text: 'Ясно, кто будет пользоваться результатом' },
-    { ok: has('Данные и материалы'), text: 'Есть данные для проверки идеи' },
-    { ok: has('Ожидаемый результат'), text: 'Понятно, что нужно передать бизнесу' },
-    { ok: has('Критерии успеха'), text: 'Ясно, как будет оценён результат' },
-    { ok: has('Связь с бизнесом'), text: 'Есть способ получить обратную связь' },
-  ]
-}

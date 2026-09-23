@@ -60,7 +60,29 @@ def init_db():
                 status TEXT NOT NULL DEFAULT 'pending', progress_awarded INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS answers (
+                id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+                field_key TEXT NOT NULL, question TEXT NOT NULL,
+                answer TEXT NOT NULL, created_at TEXT NOT NULL
+            );
         """)
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
+        additions = {
+            "extras": "TEXT NOT NULL DEFAULT '{}'",
+            "extra_confirmed": "TEXT NOT NULL DEFAULT '{}'",
+            "field_meta": "TEXT NOT NULL DEFAULT '{}'",
+            "pack_version": "TEXT NOT NULL DEFAULT 'v0.1'",
+            "handoff_result": "TEXT",
+            "deadline": "TEXT NOT NULL DEFAULT ''",
+            "industry": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        proposal_columns = {row["name"] for row in db.execute("PRAGMA table_info(proposals)")}
+        if "questions" not in proposal_columns:
+            db.execute("ALTER TABLE proposals ADD COLUMN questions TEXT NOT NULL DEFAULT ''")
 
 
 def task_from_row(row):
@@ -70,6 +92,10 @@ def task_from_row(row):
     value["fields"] = json.loads(value["fields"])
     value["confirmed"] = json.loads(value["confirmed"])
     value["ai_evidence"] = json.loads(value["ai_evidence"])
+    value["extras"] = json.loads(value.get("extras") or "{}")
+    value["extra_confirmed"] = json.loads(value.get("extra_confirmed") or "{}")
+    value["field_meta"] = json.loads(value.get("field_meta") or "{}")
+    value["handoff_result"] = json.loads(value.get("handoff_result") or "null")
     value["published"] = bool(value["published"])
     return value
 

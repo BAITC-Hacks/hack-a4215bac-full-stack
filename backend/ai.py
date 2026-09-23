@@ -45,6 +45,16 @@ class TaskAnalysis(BaseModel):
     questions: list[Question]
 
 
+class HandoffItem(BaseModel):
+    id: Literal["problem", "users", "data", "deliverable", "acceptance"]
+    passed: bool
+    explanation: str
+
+
+class HandoffReview(BaseModel):
+    checks: list[HandoffItem]
+
+
 def validate_questions(questions: list[Question]) -> list[dict]:
     seen = set()
     clean = []
@@ -55,7 +65,7 @@ def validate_questions(questions: list[Question]) -> list[dict]:
         clean.append({"field": question.field, "question": question.question.strip()})
     if not 3 <= len(clean) <= 5:
         raise ValueError("AI must return three to five questions")
-    return clean
+    return sorted(clean, key=lambda item: FIELDS[item["field"]][1], reverse=True)
 
 
 def get_client() -> OpenAI:
@@ -132,3 +142,20 @@ def generate_questions(task: dict) -> dict:
         return {"questions": validate_questions(result.questions), "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini")}
     except ValueError as exc:
         raise AIServiceError("AI вернул некорректные вопросы. Попробуйте повторить запрос.") from exc
+
+
+def review_handoff(confirmed_card: dict) -> dict:
+    """Independent clarity pass: only confirmed facts, never interview history."""
+    prompt = (
+        "Проверь, сможет ли независимая студенческая команда начать работу только по этой карточке. "
+        "Верни ровно пять проверок с id problem, users, data, deliverable, acceptance, каждую один раз. "
+        "Не используй внешние догадки. Если формулировка неоднозначна или факт отсутствует, passed=false. "
+        "Для каждой проверки коротко объясни причину по-русски. Не обещай объективный прогноз успеха.\n"
+        f"Подтверждённая карточка: {json.dumps(confirmed_card, ensure_ascii=False)}"
+    )
+    result = parse_response(HandoffReview, "Ты независимый рецензент ясности технической задачи.", prompt)
+    expected = {"problem", "users", "data", "deliverable", "acceptance"}
+    if len(result.checks) != 5 or {item.id for item in result.checks} != expected:
+        raise AIServiceError("AI вернул некорректную проверку передачи.")
+    return {item.id: {"passed": item.passed, "explanation": item.explanation.strip()[:500]}
+            for item in result.checks}

@@ -9,7 +9,7 @@ export default defineNuxtConfig({
       htmlAttrs: { lang: 'ru' },
       meta: [
         { name: 'description', content: 'FORGE помогает бизнесу превращать реальные проблемы в понятные и измеримые задачи для студенческих команд.' },
-        { name: 'theme-color', content: '#111317' },
+        { name: 'theme-color', content: '#193b68' },
       ],
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     },

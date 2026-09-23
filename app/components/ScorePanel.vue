@@ -3,14 +3,14 @@ import { computed } from 'vue'
 import { scoreTask } from '~/utils/readiness.js'
 
 const props = defineProps({ task: { type: Object, required: true } })
-defineEmits(['student-view'])
+defineEmits(['handoff'])
 const result = computed(() => scoreTask(props.task))
 const tone = computed(() => ({ Черновик: 'draft', Рабочая: 'working', Готовая: 'ready', Приоритетная: 'priority' })[result.value.level])
 </script>
 
 <template>
   <aside class="progress-panel">
-    <div class="panel-topline"><span>ГОТОВНОСТЬ ЗАДАЧИ</span><button class="text-button" @click="$emit('student-view')">◎ Глазами команды</button></div>
+    <div class="panel-topline"><span>ГОТОВНОСТЬ ЗАДАЧИ</span><button class="text-button" @click="$emit('handoff')">◎ Handoff Test</button></div>
     <div class="score-hero">
       <div class="score-ring" :style="{ '--score': `${result.score}%` }"><div class="score-ring-inner"><strong>{{ result.score }}</strong><span>/ 100</span></div></div>
       <div><span class="status" :class="`status-${tone}`"><span class="status-dot" />{{ result.level }}</span><p>Баллы получает только заполненная и подтверждённая информация.</p></div>

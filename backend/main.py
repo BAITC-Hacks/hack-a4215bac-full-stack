@@ -14,8 +14,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
-from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions
+from .ai import AIServiceError, AIUnavailable, analyze_task, generate_questions, review_handoff
 from .auth import current_user, hash_password, issue_session, require_owner, require_role, user_with_team, verify_password
+from .compiler import EXTRAS, handoff_rules
 from .domain import FIELDS, enrich_task, valid_value
 from .storage import ROOT, connect, init_db, proposal_from_row, task_from_row, team_from_row
 
@@ -49,6 +50,8 @@ class LoginPayload(BaseModel):
 
 class CreateTask(BaseModel):
     raw: str = Field(min_length=15, max_length=5000)
+    industry: str = Field(default="", max_length=80)
+    deadline: str = Field(default="", max_length=100)
 
 
 class TaskPatch(BaseModel):
@@ -56,6 +59,16 @@ class TaskPatch(BaseModel):
     category: str | None = Field(default=None, max_length=40)
     fields: dict[str, str] | None = None
     confirmed: dict[str, bool] | None = None
+    extras: dict[str, str] | None = None
+    extra_confirmed: dict[str, bool] | None = None
+    industry: str | None = Field(default=None, max_length=80)
+    deadline: str | None = Field(default=None, max_length=100)
+
+
+class AnswerPayload(BaseModel):
+    field: str
+    question: str = Field(min_length=10, max_length=300)
+    answer: str = Field(min_length=5, max_length=3000)
 
 
 class TeamPatch(BaseModel):
@@ -68,7 +81,8 @@ class ProposalCreate(BaseModel):
     idea: str = Field(min_length=12, max_length=3000)
     plan: str = Field(min_length=12, max_length=3000)
     deadline: str = Field(min_length=2, max_length=100)
-    link: str = Field(min_length=10, max_length=500)
+    link: str = Field(default="", max_length=500)
+    questions: str = Field(default="", max_length=1000)
 
 
 class Decision(BaseModel):
@@ -100,6 +114,28 @@ def ai_or_http(callable_, *args):
         raise HTTPException(503, str(exc)) from exc
     except (AIServiceError, ValueError) as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+def next_version(current: str, score: int) -> str:
+    try:
+        major, minor = (int(part) for part in current.removeprefix("v").split("."))
+    except (ValueError, AttributeError):
+        major, minor = 0, 1
+    if major == 0 and score >= 70:
+        return "v1.0"
+    return f"v{major}.{minor + 1}"
+
+
+def visible_task(task: dict, user: dict) -> dict:
+    if user["role"] == "business" and task["owner_id"] == user["id"]:
+        return task
+    result = {**task}
+    result["fields"] = {key: value if task["confirmed"].get(key) else "" for key, value in task["fields"].items()}
+    result["extras"] = {key: value if task["extra_confirmed"].get(key) else "" for key, value in task["extras"].items()}
+    result["ai_evidence"] = {}
+    result["field_meta"] = {key: meta for key, meta in task["field_meta"].items()
+                            if task["confirmed"].get(key) or task["extra_confirmed"].get(key)}
+    return result
 
 
 @app.get("/api/health")
@@ -164,7 +200,12 @@ def list_tasks(published: bool = Query(default=True), user: dict = Depends(curre
         else:
             require_role(user, "business")
             rows = db.execute("SELECT * FROM tasks WHERE published = 0 AND owner_id = ?", (user["id"],)).fetchall()
-    tasks = [enrich_task(task_from_row(row)) for row in rows]
+    tasks = []
+    with connect() as db:
+        for row in rows:
+            task = visible_task(task_from_row(row), user)
+            task["proposal_count"] = db.execute("SELECT COUNT(*) FROM proposals WHERE task_id = ?", (task["id"],)).fetchone()[0]
+            tasks.append(enrich_task(task))
     return sorted(tasks, key=lambda task: (task["readiness"]["score"], task["created_at"]), reverse=True)
 
 
@@ -174,7 +215,8 @@ def get_task(task_id: str, user: dict = Depends(current_user)):
         task = get_task_or_404(db, task_id)
         if not task["published"]:
             require_owner(user, task)
-        return enrich_task(task)
+        task["proposal_count"] = db.execute("SELECT COUNT(*) FROM proposals WHERE task_id = ?", (task_id,)).fetchone()[0]
+        return enrich_task(visible_task(task, user))
 
 
 @app.post("/api/tasks", status_code=201)
@@ -188,9 +230,12 @@ def create_task(payload: CreateTask, user: dict = Depends(current_user)):
     confirmed = {key: key == "context" and valid_value(key, raw) for key in FIELDS}
     title = raw.split(".")[0].split("\n")[0][:78]
     with connect() as db:
-        db.execute("INSERT INTO tasks VALUES (?, ?, 'AI', ?, ?, ?, ?, '{}', 0, ?)",
+        db.execute("""INSERT INTO tasks (id, title, category, owner, owner_id, fields, confirmed,
+                   ai_evidence, published, created_at, deadline, industry, updated_at, field_meta)
+                   VALUES (?, ?, 'AI', ?, ?, ?, ?, '{}', 0, ?, ?, ?, ?, ?)""",
                    (task_id, title, user["organization"], user["id"], json.dumps(fields, ensure_ascii=False),
-                    json.dumps(confirmed), now()))
+                    json.dumps(confirmed), now(), payload.deadline.strip(), payload.industry.strip(), now(),
+                    json.dumps({"context": {"source": "user", "answer_id": None, "updated_at": now()}}, ensure_ascii=False)))
         return enrich_task(get_task_or_404(db, task_id))
 
 
@@ -207,9 +252,12 @@ def analyze(task_id: str, user: dict = Depends(current_user)):
                 task["fields"][key] = value
                 task["confirmed"][key] = False
                 task["ai_evidence"][key] = result["evidence"][key]
-        db.execute("UPDATE tasks SET title = ?, category = ?, fields = ?, confirmed = ?, ai_evidence = ? WHERE id = ?",
+                task["field_meta"][key] = {"source": "ai", "source_quote": result["evidence"][key],
+                                           "answer_id": None, "updated_at": now()}
+        db.execute("UPDATE tasks SET title = ?, category = ?, fields = ?, confirmed = ?, ai_evidence = ?, field_meta = ?, updated_at = ? WHERE id = ?",
                    (task["title"], task["category"], json.dumps(task["fields"], ensure_ascii=False),
-                    json.dumps(task["confirmed"]), json.dumps(task["ai_evidence"], ensure_ascii=False), task_id))
+                    json.dumps(task["confirmed"]), json.dumps(task["ai_evidence"], ensure_ascii=False),
+                    json.dumps(task["field_meta"], ensure_ascii=False), now(), task_id))
         return {"task": enrich_task(task), "questions": result["questions"], "model": result["model"]}
 
 
@@ -221,15 +269,69 @@ def interview(task_id: str, user: dict = Depends(current_user)):
     return ai_or_http(generate_questions, task)
 
 
+@app.get("/api/tasks/{task_id}/answers")
+def list_answers(task_id: str, user: dict = Depends(current_user)):
+    with connect() as db:
+        require_owner(user, get_task_or_404(db, task_id))
+        return [dict(row) for row in db.execute("SELECT * FROM answers WHERE task_id = ? ORDER BY created_at", (task_id,))]
+
+
+@app.post("/api/tasks/{task_id}/answers", status_code=201)
+def save_answer(task_id: str, payload: AnswerPayload, user: dict = Depends(current_user)):
+    if payload.field not in FIELDS or payload.field == "context":
+        raise HTTPException(422, "Неизвестный раздел ответа")
+    answer = payload.answer.strip()
+    if not valid_value(payload.field, answer):
+        raise HTTPException(422, "Ответьте подробнее, чтобы подтвердить раздел")
+    answer_id = str(uuid.uuid4())
+    with connect() as db:
+        task = get_task_or_404(db, task_id)
+        require_owner(user, task)
+        db.execute("INSERT INTO answers VALUES (?, ?, ?, ?, ?, ?)",
+                   (answer_id, task_id, payload.field, payload.question.strip(), answer, now()))
+        task["fields"][payload.field] = answer
+        task["confirmed"][payload.field] = True
+        task["ai_evidence"].pop(payload.field, None)
+        task["field_meta"][payload.field] = {"source": "answer", "answer_id": answer_id, "updated_at": now()}
+        task["pack_version"] = next_version(task["pack_version"], enrich_task(task)["readiness"]["score"])
+        task["handoff_result"] = None
+        db.execute("""UPDATE tasks SET fields = ?, confirmed = ?, ai_evidence = ?, field_meta = ?,
+                   pack_version = ?, handoff_result = NULL, updated_at = ? WHERE id = ?""",
+                   (json.dumps(task["fields"], ensure_ascii=False), json.dumps(task["confirmed"]),
+                    json.dumps(task["ai_evidence"], ensure_ascii=False), json.dumps(task["field_meta"], ensure_ascii=False),
+                    task["pack_version"], now(), task_id))
+        return {"answer_id": answer_id, "task": enrich_task(task)}
+
+
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: str, payload: TaskPatch, user: dict = Depends(current_user)):
     with connect() as db:
         task = get_task_or_404(db, task_id)
         require_owner(user, task)
+        previous_confirmed = {key: task["fields"].get(key) for key, value in task["confirmed"].items() if value}
+        previous_extra_confirmed = {key: (task.get("deadline") if key == "deadline" else task["extras"].get(key))
+                                    for key, value in task["extra_confirmed"].items() if value}
+        previous_flags = (task["confirmed"].copy(), task["extra_confirmed"].copy())
+        changed = False
         if payload.title is not None:
-            task["title"] = payload.title.strip()
+            title = payload.title.strip()
+            changed |= title != task["title"]
+            task["title"] = title
         if payload.category is not None:
-            task["category"] = payload.category.strip()
+            category = payload.category.strip()
+            if category not in {"AI", "Web", "Data", "Design", "Другое"}:
+                raise HTTPException(422, "Неизвестная категория")
+            changed |= category != task["category"]
+            task["category"] = category
+        if payload.industry is not None:
+            changed |= payload.industry.strip() != task["industry"]
+            task["industry"] = payload.industry.strip()
+        if payload.deadline is not None:
+            changed |= payload.deadline.strip() != task["deadline"]
+            if payload.deadline.strip() != task["deadline"]:
+                task["extra_confirmed"]["deadline"] = False
+                task["field_meta"]["deadline"] = {"source": "user", "answer_id": None, "updated_at": now()}
+            task["deadline"] = payload.deadline.strip()
         if payload.fields is not None:
             for key, value in payload.fields.items():
                 if key not in FIELDS:
@@ -237,20 +339,92 @@ def update_task(task_id: str, payload: TaskPatch, user: dict = Depends(current_u
                 if len(value) > 3000:
                     raise HTTPException(422, f"Слишком длинное поле: {key}")
                 if value != task["fields"].get(key, ""):
+                    changed = True
                     task["fields"][key] = value.strip()
                     task["confirmed"][key] = False
                     task["ai_evidence"].pop(key, None)
+                    task["field_meta"][key] = {"source": "user", "answer_id": None, "updated_at": now()}
+        if payload.extras is not None:
+            for key, value in payload.extras.items():
+                if key not in EXTRAS:
+                    raise HTTPException(422, f"Неизвестное поле Task Pack: {key}")
+                if len(value) > 3000:
+                    raise HTTPException(422, f"Слишком длинное поле: {key}")
+                if value.strip() != task["extras"].get(key, ""):
+                    changed = True
+                    task["extras"][key] = value.strip()
+                    task["extra_confirmed"][key] = False
+                    task["field_meta"][key] = {"source": "user", "answer_id": None, "updated_at": now()}
         if payload.confirmed is not None:
             for key, value in payload.confirmed.items():
                 if key not in FIELDS:
                     raise HTTPException(422, f"Неизвестное поле: {key}")
                 if value and not valid_value(key, task["fields"].get(key, "")):
                     raise HTTPException(422, f"Заполните поле «{FIELDS[key][0]}» подробнее")
+                changed |= task["confirmed"].get(key) != bool(value)
                 task["confirmed"][key] = bool(value)
-        db.execute("UPDATE tasks SET title = ?, category = ?, fields = ?, confirmed = ?, ai_evidence = ? WHERE id = ?",
+                task["field_meta"].setdefault(key, {"source": "user", "answer_id": None})["updated_at"] = now()
+        if payload.extra_confirmed is not None:
+            for key, value in payload.extra_confirmed.items():
+                if key not in EXTRAS and key != "deadline":
+                    raise HTTPException(422, f"Неизвестное поле Task Pack: {key}")
+                content = task["deadline"] if key == "deadline" else task["extras"].get(key, "")
+                if value and len(content.strip()) < 3:
+                    raise HTTPException(422, f"Заполните поле «{key}» подробнее")
+                changed |= task["extra_confirmed"].get(key) != bool(value)
+                task["extra_confirmed"][key] = bool(value)
+                task["field_meta"].setdefault(key, {"source": "user", "answer_id": None})["updated_at"] = now()
+        confirmed_change = (
+            any(task["confirmed"].get(key) and not previous_flags[0].get(key) for key in task["confirmed"]) or
+            any(task["extra_confirmed"].get(key) and not previous_flags[1].get(key) for key in task["extra_confirmed"]) or
+            any(task["fields"].get(key) != value or not task["confirmed"].get(key)
+                for key, value in previous_confirmed.items()) or
+            any((task["deadline"] if key == "deadline" else task["extras"].get(key)) != value or
+                not task["extra_confirmed"].get(key) for key, value in previous_extra_confirmed.items()))
+        if confirmed_change:
+            task["pack_version"] = next_version(task["pack_version"], enrich_task(task)["readiness"]["score"])
+        if changed:
+            task["handoff_result"] = None
+        db.execute("""UPDATE tasks SET title = ?, category = ?, fields = ?, confirmed = ?, ai_evidence = ?,
+                   extras = ?, extra_confirmed = ?, field_meta = ?, pack_version = ?, handoff_result = ?,
+                   deadline = ?, industry = ?, updated_at = ? WHERE id = ?""",
                    (task["title"], task["category"], json.dumps(task["fields"], ensure_ascii=False),
-                    json.dumps(task["confirmed"]), json.dumps(task["ai_evidence"], ensure_ascii=False), task_id))
+                    json.dumps(task["confirmed"]), json.dumps(task["ai_evidence"], ensure_ascii=False),
+                    json.dumps(task["extras"], ensure_ascii=False), json.dumps(task["extra_confirmed"]),
+                    json.dumps(task["field_meta"], ensure_ascii=False), task["pack_version"],
+                    json.dumps(task["handoff_result"], ensure_ascii=False), task["deadline"], task["industry"], now(), task_id))
         return enrich_task(task)
+
+
+@app.post("/api/tasks/{task_id}/handoff")
+def run_handoff(task_id: str, user: dict = Depends(current_user)):
+    with connect() as db:
+        task = get_task_or_404(db, task_id)
+        require_owner(user, task)
+        result = handoff_rules(task)
+        if os.getenv("OPENAI_API_KEY", "").strip():
+            from .compiler import confirmed, value_of
+
+            card = {key: value_of(task, key) for key in list(FIELDS) + list(EXTRAS) + ["deadline"]
+                    if confirmed(task, key)}
+            try:
+                ai_checks = review_handoff(card)
+                for check in result["checks"]:
+                    ai_check = ai_checks[check["id"]]
+                    if check["passed"] and not ai_check["passed"]:
+                        check["passed"] = False
+                        check["explanation"] = ai_check["explanation"]
+                        check["consequence"] = "Формулировку можно трактовать по-разному."
+                result["passed"] = sum(item["passed"] for item in result["checks"])
+                result["mode"] = "openai"
+                result["notice"] = "Дополнительная AI-проверка понятности, не объективный прогноз успеха проекта."
+            except (AIUnavailable, AIServiceError, ValueError):
+                result["notice"] = "AI-проверка недоступна; показана независимая правиловая проверка подтверждённых данных."
+        result["version"] = task["pack_version"]
+        result["checked_at"] = now()
+        task["handoff_result"] = result
+        db.execute("UPDATE tasks SET handoff_result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), task_id))
+        return result
 
 
 @app.post("/api/tasks/{task_id}/publish")
@@ -308,17 +482,19 @@ def list_proposals(task_id: str | None = None, user: dict = Depends(current_user
 @app.post("/api/proposals", status_code=201)
 def create_proposal(payload: ProposalCreate, user: dict = Depends(current_user)):
     require_role(user, "team")
-    parsed = urlparse(payload.link)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    parsed = urlparse(payload.link.strip())
+    if payload.link.strip() and (parsed.scheme not in {"http", "https"} or not parsed.netloc):
         raise HTTPException(422, "Укажите корректную ссылку на прототип")
     with connect() as db:
         task = get_task_or_404(db, payload.task_id)
         if not task["published"]:
             raise HTTPException(422, "Задача ещё не опубликована")
         proposal_id = str(uuid.uuid4())
-        db.execute("INSERT INTO proposals VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)",
+        db.execute("""INSERT INTO proposals (id, task_id, team_id, idea, plan, deadline, link,
+                   status, progress_awarded, created_at, questions)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
                    (proposal_id, payload.task_id, user["team"]["id"], payload.idea.strip(), payload.plan.strip(),
-                    payload.deadline.strip(), payload.link.strip(), now()))
+                    payload.deadline.strip(), payload.link.strip(), now(), payload.questions.strip()))
         return get_proposal_or_404(db, proposal_id)
 
 
@@ -329,8 +505,8 @@ def proposal_owner(db, proposal: dict, user: dict):
 
 @app.patch("/api/proposals/{proposal_id}/decision")
 def decide_proposal(proposal_id: str, payload: Decision, user: dict = Depends(current_user)):
-    if payload.status not in {"accepted", "rejected"}:
-        raise HTTPException(422, "Решение должно быть accepted или rejected")
+    if payload.status not in {"accepted", "rejected", "pending"}:
+        raise HTTPException(422, "Решение должно быть accepted, rejected или pending")
     with connect() as db:
         proposal = get_proposal_or_404(db, proposal_id)
         proposal_owner(db, proposal, user)
