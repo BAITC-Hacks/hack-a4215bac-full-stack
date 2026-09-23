@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+.data/
+.venv/
+.vercel/
+.output/
+.nuxt/
+node_modules/
+backend/tests/
+*.pyc
+__pycache__/
+.agents/
+skills-lock.json

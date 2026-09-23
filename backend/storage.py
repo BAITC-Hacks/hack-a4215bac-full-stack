@@ -1,10 +1,79 @@
 import json
 import os
 import sqlite3
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class RemoteRow(Mapping):
+    """Small sqlite3.Row-compatible view over libsql's tuple rows."""
+
+    def __init__(self, names, values):
+        self._names = names
+        self._values = values
+        self._by_name = dict(zip(names, values))
+
+    def __getitem__(self, key):
+        return self._values[key] if isinstance(key, int) else self._by_name[key]
+
+    def __iter__(self):
+        return iter(self._names)
+
+    def __len__(self):
+        return len(self._names)
+
+
+class RemoteCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.rowcount = cursor.rowcount
+        self._names = tuple(col[0] for col in (cursor.description or ()))
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        return RemoteRow(self._names, row) if row is not None else None
+
+    def fetchall(self):
+        return [RemoteRow(self._names, row) for row in (self._cursor.fetchall() or ())]
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class RemoteConnection:
+    """Keep the rest of the application compatible with SQLite locally and Turso remotely."""
+
+    def __init__(self, url: str, token: str):
+        import libsql
+
+        self._db = libsql.connect(database=url, auth_token=token, timeout=10.0)
+
+    def execute(self, sql, params=()):
+        try:
+            return RemoteCursor(self._db.execute(sql, params))
+        except ValueError as exc:
+            if "UNIQUE constraint failed" in str(exc) or "FOREIGN KEY constraint failed" in str(exc):
+                raise sqlite3.IntegrityError(str(exc)) from exc
+            raise
+
+    def executescript(self, script):
+        # libsql's Connection.executescript can hide a batch error; execute
+        # each schema statement explicitly so failed migrations are visible.
+        for statement in script.split(";"):
+            if statement.strip():
+                self.execute(statement)
+
+    def commit(self):
+        self._db.commit()
+
+    def rollback(self):
+        self._db.rollback()
+
+    def close(self):
+        self._db.close()
 
 
 def database_path() -> Path:
@@ -14,10 +83,19 @@ def database_path() -> Path:
 
 @contextmanager
 def connect():
-    path = database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=10)
-    db.row_factory = sqlite3.Row
+    remote_url = os.getenv("TURSO_DATABASE_URL", "").strip()
+    if remote_url:
+        token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+        if not token:
+            raise RuntimeError("TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is set")
+        db = RemoteConnection(remote_url, token)
+    else:
+        if os.getenv("VERCEL"):
+            raise RuntimeError("Persistent storage is required on Vercel: set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN")
+        path = database_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path, timeout=10)
+        db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     try:
         yield db

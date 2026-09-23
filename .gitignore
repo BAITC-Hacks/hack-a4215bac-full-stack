@@ -6,4 +6,8 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.vercel/
 .DS_Store
+.env.local
+.agents/
+skills-lock.json
