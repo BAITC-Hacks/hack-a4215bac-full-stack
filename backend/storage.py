@@ -65,6 +65,19 @@ def init_db():
                 field_key TEXT NOT NULL, question TEXT NOT NULL,
                 answer TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id TEXT PRIMARY KEY, actor_id TEXT REFERENCES users(id), task_id TEXT REFERENCES tasks(id),
+                operation TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0, cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at);
+            CREATE TABLE IF NOT EXISTS role_audit (
+                id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id),
+                target_id TEXT NOT NULL REFERENCES users(id), old_role TEXT NOT NULL,
+                new_role TEXT NOT NULL, created_at TEXT NOT NULL
+            );
         """)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
         additions = {

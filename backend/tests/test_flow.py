@@ -3,10 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions
+from backend.ai import FieldSuggestion, Question, TaskAnalysis, analyze_task, validate_questions, parse_response, usage_cost
 from backend.compiler import compile_readiness, handoff_rules
 from backend.domain import FIELDS
 from backend.main import app
@@ -193,6 +194,48 @@ class ForgeFlowTest(unittest.TestCase):
         task["extras"] = {"data_access": "CSV через защищённую папку", "acceptance_owner": "Руководитель поддержки"}
         task["extra_confirmed"] = {"data_access": True, "acceptance_owner": True}
         self.assertEqual(handoff_rules(task)["passed"], 5)
+
+    def test_admin_bootstrap_roles_and_usage_ledger(self):
+        first = self.client.post("/api/auth/register", json={
+            "email": "owner@test.org", "password": "long-secure-password", "name": "Владелец",
+            "organization": "FORGE", "role": "business", "skills": [],
+        }).json()
+        second = self.client.post("/api/auth/register", json={
+            "email": "member@test.org", "password": "another-long-password", "name": "Участник",
+            "organization": "Студия", "role": "team", "skills": ["Python"],
+        }).json()
+        owner_headers = {"Authorization": f"Bearer {first['token']}"}
+        member_headers = {"Authorization": f"Bearer {second['token']}"}
+        self.assertEqual(self.client.get("/api/admin/overview", headers=owner_headers).status_code, 403)
+        self.assertEqual(self.client.post("/api/auth/register", json={
+            "email": "fake@test.org", "password": "long-secure-password", "name": "Фейк",
+            "organization": "FORGE", "role": "admin", "skills": [],
+        }).status_code, 422)
+        with patch.dict(os.environ, {"ADMIN_BOOTSTRAP_TOKEN": "a-long-random-bootstrap-secret-12345"}):
+            self.assertTrue(self.client.get("/api/admin/bootstrap-status", headers=owner_headers).json()["available"])
+            self.assertEqual(self.client.post("/api/admin/bootstrap", headers=owner_headers, json={"token": "wrong"}).status_code, 403)
+            boot = self.client.post("/api/admin/bootstrap", headers=owner_headers, json={"token": "a-long-random-bootstrap-secret-12345"})
+            self.assertEqual(boot.status_code, 200)
+            self.assertEqual(boot.json()["role"], "admin")
+            self.assertEqual(self.client.post("/api/admin/bootstrap", headers=member_headers, json={"token": "a-long-random-bootstrap-secret-12345"}).status_code, 409)
+        self.assertEqual(self.client.get("/api/admin/overview", headers=member_headers).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/admin/users/{first['user']['id']}/role", headers=owner_headers, json={"role": "business"}).status_code, 409)
+        promoted = self.client.patch(f"/api/admin/users/{second['user']['id']}/role", headers=owner_headers, json={"role": "admin"})
+        self.assertEqual(promoted.json()["role"], "admin")
+        self.assertEqual(self.client.patch(f"/api/admin/users/{first['user']['id']}/role", headers=owner_headers, json={"role": "business"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/admin/overview", headers=owner_headers).status_code, 403)
+        self.assertEqual(usage_cost("gpt-4.1-mini", 1000, 200, 500), 0.00114)
+        sample = SimpleNamespace(status="completed", model="gpt-4.1-mini", output_parsed={"ok": True},
+                                 usage=SimpleNamespace(input_tokens=1000, output_tokens=500,
+                                                       input_tokens_details=SimpleNamespace(cached_tokens=200)))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}), patch("backend.ai.get_client") as client:
+            client.return_value.responses.parse.return_value = sample
+            self.assertEqual(parse_response(dict, "system", "user", operation="interview", actor_id=second['user']['id']), {"ok": True})
+        overview = self.client.get("/api/admin/overview", headers=member_headers).json()
+        self.assertEqual(overview["usage"]["input_tokens"], 1000)
+        self.assertEqual(overview["usage"]["output_tokens"], 500)
+        self.assertEqual(overview["usage"]["estimated_cost_usd"], 0.00114)
+        self.assertEqual(len(overview["role_audit"]), 3)
 
 
 if __name__ == "__main__":

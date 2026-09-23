@@ -17,6 +17,10 @@ const authBusy = ref(false)
 const authForm = reactive({ email: '', password: '', name: '', organization: '', role: 'business', skills: '' })
 const aiConfigured = ref(false)
 const aiModel = ref('')
+const adminOverview = ref(null)
+const bootstrapStatus = ref(null)
+const bootstrapSecret = ref('')
+const adminBusy = ref(false)
 const profile = reactive({ name: '', skills: '' })
 const view = ref('workspace')
 const phase = ref('start')
@@ -58,6 +62,7 @@ const confirmedCount = computed(() => draft.value ? scoreTask(draft.value).items
 const myTasks = computed(() => published.value.filter((task) => task.owner_id === user.value?.id))
 const inboxTasks = computed(() => user.value?.role === 'business' ? myTasks.value : published.value.filter((task) => proposals.value.some((item) => item.task_id === task.id)))
 const isBusiness = computed(() => user.value?.role === 'business')
+const isAdmin = computed(() => user.value?.role === 'admin')
 const workspaceTasks = computed(() => [...drafts.value, ...myTasks.value].sort((a, b) => b.created_at.localeCompare(a.created_at)))
 const averageScore = computed(() => workspaceTasks.value.length ? Math.round(workspaceTasks.value.reduce((sum, item) => sum + scoreTask(item).score, 0) / workspaceTasks.value.length) : 0)
 const attentionCount = computed(() => workspaceTasks.value.filter((item) => item.build?.errors).length)
@@ -91,7 +96,7 @@ async function authenticate() {
     localStorage.setItem('forge_token', result.token)
     user.value = result.user
     authForm.password = ''
-    view.value = isBusiness.value ? 'workspace' : 'catalog'
+    view.value = isAdmin.value ? 'admin' : isBusiness.value ? 'workspace' : 'catalog'
     await load()
   } catch (error) { notify(explain(error)) }
   finally { authBusy.value = false }
@@ -103,6 +108,7 @@ async function logout() {
   token.value = ''
   user.value = null
   tasks.value = []; drafts.value = []; teams.value = []; proposals.value = []
+  adminOverview.value = null; bootstrapStatus.value = null; bootstrapSecret.value = ''
   draft.value = null; selectedTaskId.value = null; inboxTaskId.value = null
   Object.assign(authForm, { email: '', password: '', name: '', organization: '', role: 'business', skills: '' })
   authMode.value = 'login'
@@ -114,7 +120,7 @@ onMounted(async () => {
   token.value = saved
   try {
     user.value = await api('/api/auth/me')
-    view.value = isBusiness.value ? 'workspace' : 'catalog'
+    view.value = isAdmin.value ? 'admin' : isBusiness.value ? 'workspace' : 'catalog'
     await load()
   } catch {
     localStorage.removeItem('forge_token')
@@ -126,16 +132,46 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
+    if (isAdmin.value) {
+      adminOverview.value = await api('/api/admin/overview')
+      bootstrapStatus.value = null
+      return
+    }
     const [taskList, draftList, teamList, proposalList, health] = await Promise.all([api('/api/tasks'), isBusiness.value ? api('/api/tasks?published=false') : Promise.resolve([]), api('/api/teams'), api('/api/proposals'), api('/api/health')])
     tasks.value = taskList
     drafts.value = draftList
     teams.value = teamList
     proposals.value = proposalList
     aiConfigured.value = health.ai_configured
+    bootstrapStatus.value = await api('/api/admin/bootstrap-status')
     if (!inboxTasks.value.some((task) => task.id === inboxTaskId.value)) inboxTaskId.value = inboxTasks.value[0]?.id || null
     if (user.value?.team) { profile.name = user.value.team.name; profile.skills = user.value.team.skills.join(', ') }
   } catch (error) { loadError.value = explain(error) }
   finally { loading.value = false }
+}
+
+async function bootstrapAdmin() {
+  if (!bootstrapSecret.value.trim()) { notify('Введите секрет администратора из .env.'); return }
+  adminBusy.value = true
+  try {
+    user.value = await api('/api/admin/bootstrap', { method: 'POST', body: { token: bootstrapSecret.value } })
+    bootstrapSecret.value = ''
+    view.value = 'admin'
+    await load()
+    notify('Администратор назначен. Панель управления открыта.')
+  } catch (error) { notify(explain(error)) }
+  finally { adminBusy.value = false }
+}
+
+async function changeUserRole(target, role) {
+  if (role === target.role) return
+  adminBusy.value = true
+  try {
+    await api(`/api/admin/users/${target.id}/role`, { method: 'PATCH', body: { role } })
+    adminOverview.value = await api('/api/admin/overview')
+    notify(`Роль ${target.email} изменена на «${role}».`)
+  } catch (error) { notify(explain(error)) }
+  finally { adminBusy.value = false }
 }
 
 function localQuestions(task) {
@@ -364,7 +400,7 @@ async function saveProfile() {
   <div v-else-if="!user" class="auth-shell">
     <div class="auth-brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div>
     <div class="auth-layout">
-      <section class="auth-story"><span class="eyebrow">AI SANA · ПРАКТИЧЕСКИЕ ЗАДАНИЯ</span><h1>От сырой идеи к задаче, готовой для команды.</h1><p>FORGE проверяет полноту постановки, собирает Task Pack и помогает передать работу студенческой команде без лишней неопределённости.</p><div class="auth-steps"><span>01 · Анализ</span><span>02 · Readiness Build</span><span>03 · Task Pack</span><span>04 · Handoff Test</span></div></section>
+      <section class="auth-story"><span class="eyebrow">AI SANA · ПРАКТИЧЕСКИЕ ЗАДАНИЯ</span><h1>От сырой идеи к задаче, готовой для команды.</h1><p>FORGE проверяет полноту постановки, собирает Task Pack и помогает передать работу студенческой команде без лишней неопределённости.</p><div class="auth-steps"><span>01 · Анализ</span><span>02 · Проверка</span><span>03 · Материалы</span><span>04 · Передача</span></div></section>
       <section class="auth-card"><span class="eyebrow accent-text">ДОБРО ПОЖАЛОВАТЬ</span><h2>{{ authMode === 'login' ? 'Войти в FORGE' : 'Создать аккаунт' }}</h2><p>{{ authMode === 'login' ? 'Продолжите работу со своими задачами и откликами.' : 'Выберите свою роль и начните работать с реальными проектами.' }}</p><div class="auth-switch"><button :class="{ active: authMode === 'login' }" @click="authMode = 'login'">Вход</button><button :class="{ active: authMode === 'register' }" @click="authMode = 'register'">Регистрация</button></div>
         <form class="auth-form" @submit.prevent="authenticate"><template v-if="authMode === 'register'"><div class="role-picker"><button type="button" :class="{ active: authForm.role === 'business' }" @click="authForm.role = 'business'"><strong>Бизнес</strong><span>Публикую задачи</span></button><button type="button" :class="{ active: authForm.role === 'team' }" @click="authForm.role = 'team'"><strong>Команда</strong><span>Предлагаю решения</span></button></div><label>Ваше имя<input v-model="authForm.name" autocomplete="name" required minlength="2" placeholder="Как к вам обращаться" /></label><label>{{ authForm.role === 'business' ? 'Организация' : 'Название команды' }}<input v-model="authForm.organization" required minlength="2" :placeholder="authForm.role === 'business' ? 'Название компании' : 'Название команды'" /></label><label v-if="authForm.role === 'team'">Навыки команды<input v-model="authForm.skills" required placeholder="Например: Python, UX, Data" /><small>Через запятую, хотя бы один навык</small></label></template><label>Электронная почта<input v-model="authForm.email" type="email" autocomplete="email" required placeholder="you@example.com" /></label><label>Пароль<input v-model="authForm.password" type="password" :autocomplete="authMode === 'register' ? 'new-password' : 'current-password'" required :minlength="authMode === 'register' ? 10 : 1" placeholder="Минимум 10 символов при регистрации" /></label><button class="button button-orange full" type="submit" :disabled="authBusy">{{ authBusy ? 'Подождите...' : authMode === 'login' ? 'Войти →' : 'Зарегистрироваться →' }}</button></form>
       </section>
@@ -375,30 +411,34 @@ async function saveProfile() {
       <div class="brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div>
       <div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <nav aria-label="Основная навигация">
+        <button v-if="isAdmin" class="nav-item" :class="{ active: view === 'admin' }" @click="view = 'admin'"><span class="nav-icon">◈</span> Панель управления</button>
         <button v-if="isBusiness" class="nav-item" :class="{ active: view === 'workspace' }" @click="view = 'workspace'"><span class="nav-icon">▤</span> Обзор задач <span class="nav-count">{{ workspaceTasks.length }}</span></button>
         <button v-if="isBusiness" class="nav-item" :class="{ active: view === 'create' }" @click="view = 'create'"><span class="nav-icon">＋</span> Создать задачу</button>
-        <button class="nav-item" :class="{ active: view === 'catalog' }" @click="showCatalog"><span class="nav-icon">▦</span> Каталог <span class="nav-count">{{ published.length }}</span></button>
-        <button class="nav-item" :class="{ active: view === 'inbox' }" @click="view = 'inbox'"><span class="nav-icon">▣</span> {{ isBusiness ? 'Предложения' : 'Мои отклики' }} <span class="nav-count">{{ pendingCount }}</span></button>
-        <button v-if="!isBusiness" class="nav-item" :class="{ active: view === 'profile' }" @click="view = 'profile'"><span class="nav-icon">◉</span> Профиль</button>
+        <button v-if="!isAdmin" class="nav-item" :class="{ active: view === 'catalog' }" @click="showCatalog"><span class="nav-icon">▦</span> Каталог <span class="nav-count">{{ published.length }}</span></button>
+        <button v-if="!isAdmin" class="nav-item" :class="{ active: view === 'inbox' }" @click="view = 'inbox'"><span class="nav-icon">▣</span> {{ isBusiness ? 'Предложения' : 'Мои отклики' }} <span class="nav-count">{{ pendingCount }}</span></button>
+        <button v-if="!isBusiness && !isAdmin" class="nav-item" :class="{ active: view === 'profile' }" @click="view = 'profile'"><span class="nav-icon">◉</span> Профиль</button>
       </nav>
       <div class="sidebar-bottom"><span class="little-star">✳</span><p>Хорошие решения начинаются с ясной задачи.</p><small>AI Sana · FORGE</small></div>
     </aside>
 
     <main class="main">
-      <header class="topbar"><div class="mobile-brand"><div class="brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div></div><span class="topbar-path">FORGE <span>/</span> {{ view === 'workspace' ? 'Обзор задач' : view === 'create' ? 'Readiness Lab' : view === 'catalog' ? 'Каталог задач' : view === 'profile' ? 'Профиль команды' : 'Предложения' }}</span><div class="topbar-right"><span v-if="isBusiness" class="demo-badge" :class="{ 'ai-off': !aiConfigured }"><span /> {{ aiConfigured ? 'AI подключён' : 'AI не настроен' }}</span><span class="topbar-user">{{ user.name }} · {{ user.organization }}</span><button class="logout-button" @click="logout">Выйти</button></div></header>
+      <header class="topbar"><div class="mobile-brand"><div class="brand"><div class="brand-mark">F<span>.</span></div><span>FORGE</span></div></div><span class="topbar-path">FORGE <span>/</span> {{ view === 'admin' ? 'Управление' : view === 'workspace' ? 'Обзор задач' : view === 'create' ? 'Создание задачи' : view === 'catalog' ? 'Каталог задач' : view === 'profile' ? 'Профиль команды' : 'Предложения' }}</span><div class="topbar-right"><span v-if="isBusiness" class="demo-badge" :class="{ 'ai-off': !aiConfigured }"><span /> {{ aiConfigured ? 'AI подключён' : 'AI не настроен' }}</span><span class="topbar-user">{{ user.name }} · {{ user.organization }}</span><button class="logout-button" @click="logout">Выйти</button></div></header>
+      <div v-if="!isAdmin && bootstrapStatus?.available" class="bootstrap-banner"><div><strong>Первый администратор FORGE</strong><span>{{ bootstrapStatus.configured ? 'Введите секрет из .env, чтобы открыть панель управления.' : 'Задайте ADMIN_BOOTSTRAP_TOKEN в .env и перезапустите API.' }}</span></div><form v-if="bootstrapStatus.configured" @submit.prevent="bootstrapAdmin"><input v-model="bootstrapSecret" type="password" autocomplete="off" aria-label="Секрет администратора" placeholder="Секрет администратора" /><button class="button button-dark" :disabled="adminBusy" type="submit">Назначить себя →</button></form></div>
 
       <div v-if="loading" class="page loading-page"><div class="loading-state"><div class="loading-mark">✳</div><strong>Загружаем FORGE...</strong></div></div>
       <div v-else-if="loadError" class="page error-page"><h1>Не удалось подключиться к API</h1><p>{{ loadError }}</p><p>Запустите FastAPI на порту 8000 и повторите попытку.</p><button class="button button-dark" @click="load">Повторить →</button></div>
 
-      <div v-else-if="view === 'workspace' && isBusiness" class="page workspace-page"><div class="page-heading"><div><span class="eyebrow accent-text">WORKSPACE</span><h1>Ваши задачи.</h1><p>От первой формулировки до передачи команде — все задачи и пробелы в одном месте.</p></div><button class="button button-orange" @click="startNew">＋ Создать задачу</button></div><div class="workspace-stats"><div><span>Всего задач</span><strong>{{ workspaceTasks.length }}</strong></div><div><span>Средняя готовность</span><strong>{{ averageScore }}<small>/100</small></strong></div><div><span>Требуют уточнений</span><strong>{{ attentionCount }}</strong></div><div><span>Новые предложения</span><strong>{{ pendingCount }}</strong></div></div><div v-if="workspaceTasks.length" class="workspace-list"><article v-for="task in workspaceTasks" :key="task.id" class="workspace-item"><div><span class="eyebrow">{{ task.published ? 'ОПУБЛИКОВАНА' : 'ЧЕРНОВИК' }} · {{ task.task_pack?.version }}</span><h2>{{ task.title }}</h2><p>{{ task.industry || task.category }} · {{ task.build?.errors }} ошибок · {{ task.build?.warnings }} предупреждений · {{ proposalCount(task) }} предложений</p></div><div class="workspace-item-actions"><span class="build-pill" :class="`build-${task.build?.status}`">{{ task.build?.status === 'success' ? 'Build successful' : task.build?.status === 'warning' ? 'Build with warnings' : 'Build failed' }}</span><strong>{{ scoreTask(task).score }}<small>/100</small></strong><button class="button button-ghost" @click="resumeDraft(task)">Открыть →</button></div></article></div><div v-else class="empty-state">Пока нет задач. Опишите первую проблему — FORGE сохранит черновик и покажет, что нужно уточнить.</div></div>
+      <AdminPanel v-else-if="view === 'admin' && adminOverview" :overview="adminOverview" :busy="adminBusy" @refresh="load" @role="changeUserRole" />
+
+      <div v-else-if="view === 'workspace' && isBusiness" class="page workspace-page"><div class="workspace-hero"><div class="workspace-hero-copy"><span class="eyebrow">ВАШЕ РАБОЧЕЕ ПРОСТРАНСТВО</span><h1>Превратите идею<br>в задачу, <em>понятную всем.</em></h1><p>Один маршрут: опишите проблему, уточните детали, проверьте готовность и передайте её команде.</p><div class="workspace-hero-actions"><button class="button button-orange" @click="startNew">Создать задачу <span>↗</span></button><button v-if="workspaceTasks.length" class="button button-ghost" @click="resumeDraft(workspaceTasks[0])">Продолжить работу →</button></div></div><div class="workspace-hero-art" aria-hidden="true" /></div><div class="page-heading"><div><span class="eyebrow accent-text">WORKSPACE</span><h1>Ваши задачи.</h1><p>От первой формулировки до передачи команде — все задачи и пробелы в одном месте.</p></div><button class="button button-orange" @click="startNew">＋ Создать задачу</button></div><div class="workspace-stats"><div><span>Всего задач</span><strong>{{ workspaceTasks.length }}</strong></div><div><span>Средняя готовность</span><strong>{{ averageScore }}<small>/100</small></strong></div><div><span>Требуют уточнений</span><strong>{{ attentionCount }}</strong></div><div><span>Новые предложения</span><strong>{{ pendingCount }}</strong></div></div><div v-if="workspaceTasks.length" class="workspace-list"><article v-for="task in workspaceTasks" :key="task.id" class="workspace-item"><div><span class="eyebrow">{{ task.published ? 'ОПУБЛИКОВАНА' : 'ЧЕРНОВИК' }} · {{ task.task_pack?.version }}</span><h2>{{ task.title }}</h2><p>{{ task.industry || task.category }} · {{ task.build?.errors }} ошибок · {{ task.build?.warnings }} предупреждений · {{ proposalCount(task) }} предложений</p></div><div class="workspace-item-actions"><span class="build-pill" :class="`build-${task.build?.status}`">{{ task.build?.status === 'success' ? 'Готова' : task.build?.status === 'warning' ? 'Есть уточнения' : 'Нужны детали' }}</span><strong>{{ scoreTask(task).score }}<small>/100</small></strong><button class="button button-ghost" @click="resumeDraft(task)">Открыть →</button></div></article></div><div v-else class="empty-state">Пока нет задач. Опишите первую проблему — FORGE сохранит черновик и покажет, что нужно уточнить.</div></div>
 
       <div v-else-if="view === 'create'" class="page create-page">
         <div class="page-heading"><div><span class="eyebrow accent-text">{{ phase === 'start' ? 'NEW TASK' : phase === 'interview' ? 'READINESS LAB' : phase === 'review' ? 'TASK BLUEPRINT' : phase === 'pack' ? 'TASK PACK EDITOR' : 'HANDOFF TEST' }}</span><h1>{{ phase === 'start' ? 'Начните с проблемы.' : phase === 'interview' ? 'Уточняем постановку.' : phase === 'review' ? 'Исправьте пробелы.' : phase === 'pack' ? 'Соберите Task Pack.' : 'Проверьте передачу.' }}</h1><p>{{ phase === 'start' ? 'Опишите ситуацию своими словами. Система покажет начальную готовность и путь к понятной задаче.' : phase === 'interview' ? 'Один вопрос за раз. Ответы сохраняются как подтверждённые сведения.' : phase === 'review' ? 'Диагностики связаны с разделами карточки. Подтверждайте только проверенные факты.' : phase === 'pack' ? 'Проверьте рабочие материалы, критерии приёмки и детали сотрудничества.' : 'Проверка использует только подтверждённый Task Pack.' }}</p></div><button v-if="phase !== 'start'" class="button button-ghost" @click="startNew">＋ Новая задача</button></div>
-        <div v-if="draft" class="flow-steps"><button :class="{ active: phase === 'interview' }" @click="phase = 'interview'">01 Интервью</button><button :class="{ active: phase === 'review' }" @click="phase = 'review'">02 Blueprint</button><button :class="{ active: phase === 'pack' }" @click="phase = 'pack'">03 Task Pack</button><button :class="{ active: phase === 'handoff' }" @click="phase = 'handoff'">04 Handoff Test</button></div>
+        <div v-if="draft" class="flow-steps" aria-label="Этапы создания задачи"><button :class="{ active: phase === 'interview' }" :aria-current="phase === 'interview' ? 'step' : undefined" @click="phase = 'interview'">1. Ответы</button><button :class="{ active: phase === 'review' }" :aria-current="phase === 'review' ? 'step' : undefined" @click="phase = 'review'">2. Карточка</button><button :class="{ active: phase === 'pack' }" :aria-current="phase === 'pack' ? 'step' : undefined" @click="goToPack">3. Материалы</button><button :class="{ active: phase === 'handoff' }" :aria-current="phase === 'handoff' ? 'step' : undefined" @click="runHandoff">4. Проверка</button></div>
 
         <div v-if="phase === 'start'" class="start-grid">
-          <div class="start-card"><div class="card-heading"><span class="round-icon">✳</span><div><strong>Опишите вашу задачу</strong><span>Достаточно одного абзаца, даже если детали ещё неизвестны.</span></div></div><textarea v-model="raw" class="hero-textarea" maxlength="5000" placeholder="Например: хотим использовать AI, чтобы улучшить обработку обращений клиентов..." /><div class="new-task-meta"><label>Отрасль или направление<input v-model="industry" maxlength="80" placeholder="Например: клиентский сервис" /></label><label>Предполагаемый срок<input v-model="deadline" maxlength="100" placeholder="Например: 10 дней" /></label></div><div class="textarea-footer"><span>{{ raw.length }} / 5000 символов</span><button class="button button-orange" :disabled="busy" @click="startTask">{{ busy ? 'Анализируем...' : 'Проанализировать задачу' }} <span>→</span></button></div></div>
-          <div class="intro-panel"><span class="eyebrow">ПУТЬ ЗАДАЧИ</span><div class="intro-step"><b>01</b><div><strong>Readiness Build</strong><span>Детерминированный рейтинг и диагностики покажут критические пробелы.</span></div></div><div class="intro-step"><b>02</b><div><strong>Task Pack</strong><span>Соберите материалы, результат и критерии приёмки из подтверждённых фактов.</span></div></div><div class="intro-step"><b>03</b><div><strong>Handoff Test</strong><span>Проверьте, сможет ли независимая команда начать работу.</span></div></div><div class="ai-hint" v-if="!aiConfigured">OpenAI пока не настроен. Вопросы формируются правилами и явно помечаются; рабочие данные сохраняются. Добавьте ключ в серверный .env для AI-анализа.</div><div class="ai-hint" v-else>AI-анализ подключён. Подсказки требуют ручного подтверждения.</div></div>
+          <div class="start-card"><div class="card-heading"><span class="round-icon">✳</span><div><strong>Опишите вашу задачу</strong><span>Достаточно одного абзаца, даже если детали ещё неизвестны.</span></div></div><textarea v-model="raw" class="hero-textarea" maxlength="5000" placeholder="Например: хотим использовать AI, чтобы улучшить обработку обращений клиентов..." /><div class="new-task-meta"><label>Отрасль или направление<input v-model="industry" maxlength="80" placeholder="Например: клиентский сервис" /></label><label>Предполагаемый срок<input v-model="deadline" maxlength="100" placeholder="Например: 10 дней" /></label></div><div class="textarea-footer"><span>{{ raw.length }} / 5000 символов</span><button class="button button-orange" :disabled="busy" @click="startTask">{{ busy ? 'Анализируем...' : 'Создать и проверить задачу' }} <span>→</span></button></div></div>
+          <div class="intro-panel"><span class="eyebrow">ПУТЬ ЗАДАЧИ</span><div class="intro-step"><b>01</b><div><strong>Проверим полноту</strong><span>Детерминированный рейтинг и диагностики покажут критические пробелы.</span></div></div><div class="intro-step"><b>02</b><div><strong>Соберём материалы</strong><span>Соберите материалы, результат и критерии приёмки из подтверждённых фактов.</span></div></div><div class="intro-step"><b>03</b><div><strong>Проверим передачу</strong><span>Проверьте, сможет ли независимая команда начать работу.</span></div></div><div class="ai-hint" v-if="!aiConfigured">OpenAI пока не настроен. Вопросы формируются правилами и явно помечаются; рабочие данные сохраняются. Добавьте ключ в серверный .env для AI-анализа.</div><div class="ai-hint" v-else>AI-анализ подключён. Подсказки требуют ручного подтверждения.</div></div>
         </div>
         <section v-if="phase === 'start' && drafts.length" class="drafts-section"><div class="drafts-head"><span class="eyebrow">СОХРАНЁННЫЕ ЧЕРНОВИКИ</span><span>{{ drafts.length }} задач</span></div><div class="drafts-grid"><button v-for="task in drafts.slice(0, 6)" :key="task.id" class="draft-resume" @click="resumeDraft(task)"><span class="draft-icon">↗</span><strong>{{ task.title }}</strong><small>{{ scoreTask(task).score }} / 100 · Продолжить</small></button></div></section>
 

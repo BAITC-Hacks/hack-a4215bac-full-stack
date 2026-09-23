@@ -1,0 +1,8 @@
+.workspace-hero::after{background:linear-gradient(90deg,rgba(12,13,16,.99) 0%,rgba(12,13,16,.91) 38%,rgba(12,13,16,.45) 76%,transparent 100%)}
+.flow-steps button{background:#1d1f24;border-color:#41434b;color:#c4c7ce;box-shadow:none}
+.flow-steps button:hover{background:#2d2f37;color:#fff}
+.flow-steps button.active{background:linear-gradient(145deg,#e8eaee,#c4c7cd);border-color:#e8eaee;color:#111216}
+.mobile-brand .brand-mark{background:linear-gradient(145deg,#f7f7f8,#92969e);color:#111216}
+.workspace-page>.page-heading>.button{display:none}
+@media(max-width:620px){.auth-story{min-height:410px;padding-bottom:200px}.auth-story::after{height:155px}.auth-steps{position:relative;z-index:1}}
+@media(max-width:620px){.workspace-hero{background-position:left center}.workspace-hero::after{background:linear-gradient(90deg,rgba(12,13,16,.97),rgba(12,13,16,.86))}.page-heading>.button{font-size:11px;width:auto;padding:0 12px}.workspace-page>.page-heading>.button{display:none}}

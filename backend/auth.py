@@ -44,7 +44,7 @@ def user_with_team(db, user_id: str) -> dict:
     if user is None:
         raise HTTPException(401, "Сессия недействительна")
     team_row = db.execute("SELECT * FROM teams WHERE user_id = ?", (user_id,)).fetchone()
-    user["team"] = team_from_row(team_row) if team_row else None
+    user["team"] = team_from_row(team_row) if team_row and user["role"] == "team" else None
     return user
 
 

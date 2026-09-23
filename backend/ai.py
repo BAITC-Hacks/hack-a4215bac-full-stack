@@ -3,12 +3,15 @@
 import json
 import logging
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Literal
 
 from openai import OpenAI
 from pydantic import BaseModel
 
 from .domain import FIELDS
+from .storage import connect
 
 logger = logging.getLogger(__name__)
 
@@ -75,23 +78,63 @@ def get_client() -> OpenAI:
     return OpenAI(api_key=api_key, timeout=20.0, max_retries=1)
 
 
-def parse_response(schema, system: str, user: str):
+def usage_cost(model: str, input_tokens: int, cached_tokens: int, output_tokens: int) -> float | None:
+    configured = [os.getenv(key, "").strip() for key in (
+        "OPENAI_INPUT_USD_PER_MILLION", "OPENAI_CACHED_INPUT_USD_PER_MILLION", "OPENAI_OUTPUT_USD_PER_MILLION")]
+    if all(configured):
+        try:
+            rates = [float(value) for value in configured]
+            if any(rate < 0 for rate in rates):
+                return None
+        except ValueError:
+            return None
+    elif model in {"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"}:
+        rates = [0.40, 0.10, 1.60]
+    else:
+        return None
+    return round(((input_tokens - cached_tokens) * rates[0] + cached_tokens * rates[1] + output_tokens * rates[2]) / 1_000_000, 8)
+
+
+def record_usage(operation: str, model: str, status: str, response=None, actor_id: str | None = None,
+                 task_id: str | None = None):
+    usage = getattr(response, "usage", None)
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cached_tokens = min(input_tokens, int(getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0))
+    cost = usage_cost(model, input_tokens, cached_tokens, output_tokens) if usage else None
+    try:
+        with connect() as db:
+            db.execute("""INSERT INTO ai_usage (id, actor_id, task_id, operation, model, status,
+                       input_tokens, cached_input_tokens, output_tokens, estimated_cost_usd, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (str(uuid.uuid4()), actor_id, task_id, operation, model, status,
+                        input_tokens, cached_tokens, output_tokens, cost, datetime.now(timezone.utc).isoformat()))
+    except Exception as exc:
+        logger.warning("AI usage ledger unavailable: %s", type(exc).__name__)
+
+
+def parse_response(schema, system: str, user: str, *, operation: str = "unknown",
+                   actor_id: str | None = None, task_id: str | None = None):
     client = get_client()
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    response = None
     try:
         response = client.responses.parse(
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+            model=model,
             input=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             text_format=schema,
         )
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError("AI returned an incomplete response")
+        record_usage(operation, response.model or model, "completed", response, actor_id, task_id)
         return response.output_parsed
     except Exception as exc:
+        record_usage(operation, getattr(response, "model", None) or model, "failed", response, actor_id, task_id)
         logger.warning("OpenAI request failed: %s", type(exc).__name__)
         raise AIServiceError("AI сейчас недоступен. Проверьте ключ, доступ к модели и соединение.") from exc
 
 
-def analyze_task(task: dict) -> dict:
+def analyze_task(task: dict, actor_id: str | None = None) -> dict:
     raw = task["fields"]["context"]
     prompt = (
         "Преобразуй исходное описание бизнес-проблемы в предварительную карточку задачи. "
@@ -105,7 +148,8 @@ def analyze_task(task: dict) -> dict:
         "Текст ответа на русском языке.\n"
         f"Исходный текст: {json.dumps(raw, ensure_ascii=False)}"
     )
-    result = parse_response(TaskAnalysis, "Ты редактор задач для студенческих команд. Не добавляй неподтверждённых фактов.", prompt)
+    result = parse_response(TaskAnalysis, "Ты редактор задач для студенческих команд. Не добавляй неподтверждённых фактов.", prompt,
+                            operation="analysis", actor_id=actor_id, task_id=task.get("id"))
     questions = validate_questions(result.questions)
     normalized_raw = " ".join(raw.lower().split())
     suggestions = {}
@@ -126,7 +170,7 @@ def analyze_task(task: dict) -> dict:
     }
 
 
-def generate_questions(task: dict) -> dict:
+def generate_questions(task: dict, actor_id: str | None = None) -> dict:
     fields = {key: value for key, value in task["fields"].items() if key == "context" or task["confirmed"].get(key)}
 
     prompt = (
@@ -137,14 +181,15 @@ def generate_questions(task: dict) -> dict:
         "Не повторяй уже ясные сведения. Ответ должен соответствовать заданной JSON-схеме.\n"
         f"Описание и подтверждённые данные: {json.dumps(fields, ensure_ascii=False)}"
     )
-    result = parse_response(Questions, "Ты редактор технических задач. Задавай только проверяемые вопросы.", prompt)
+    result = parse_response(Questions, "Ты редактор технических задач. Задавай только проверяемые вопросы.", prompt,
+                            operation="interview", actor_id=actor_id, task_id=task.get("id"))
     try:
         return {"questions": validate_questions(result.questions), "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini")}
     except ValueError as exc:
         raise AIServiceError("AI вернул некорректные вопросы. Попробуйте повторить запрос.") from exc
 
 
-def review_handoff(confirmed_card: dict) -> dict:
+def review_handoff(confirmed_card: dict, actor_id: str | None = None, task_id: str | None = None) -> dict:
     """Independent clarity pass: only confirmed facts, never interview history."""
     prompt = (
         "Проверь, сможет ли независимая студенческая команда начать работу только по этой карточке. "
@@ -153,7 +198,8 @@ def review_handoff(confirmed_card: dict) -> dict:
         "Для каждой проверки коротко объясни причину по-русски. Не обещай объективный прогноз успеха.\n"
         f"Подтверждённая карточка: {json.dumps(confirmed_card, ensure_ascii=False)}"
     )
-    result = parse_response(HandoffReview, "Ты независимый рецензент ясности технической задачи.", prompt)
+    result = parse_response(HandoffReview, "Ты независимый рецензент ясности технической задачи.", prompt,
+                            operation="handoff", actor_id=actor_id, task_id=task_id)
     expected = {"problem", "users", "data", "deliverable", "acceptance"}
     if len(result.checks) != 5 or {item.id for item in result.checks} != expected:
         raise AIServiceError("AI вернул некорректную проверку передачи.")

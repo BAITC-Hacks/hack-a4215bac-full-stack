@@ -1,6 +1,7 @@
 """FORGE API: accounts, AI-supported tasks, proposals and business decisions."""
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -87,6 +88,14 @@ class ProposalCreate(BaseModel):
 
 class Decision(BaseModel):
     status: str
+
+
+class BootstrapPayload(BaseModel):
+    token: str
+
+
+class RolePayload(BaseModel):
+    role: str
 
 
 def now() -> str:
@@ -244,7 +253,7 @@ def analyze(task_id: str, user: dict = Depends(current_user)):
     with connect() as db:
         task = get_task_or_404(db, task_id)
         require_owner(user, task)
-        result = ai_or_http(analyze_task, task)
+        result = ai_or_http(analyze_task, task, user["id"])
         task["title"] = result["title"] or task["title"]
         task["category"] = result["category"]
         for key, value in result["suggestions"].items():
@@ -266,7 +275,7 @@ def interview(task_id: str, user: dict = Depends(current_user)):
     with connect() as db:
         task = get_task_or_404(db, task_id)
         require_owner(user, task)
-    return ai_or_http(generate_questions, task)
+    return ai_or_http(generate_questions, task, user["id"])
 
 
 @app.get("/api/tasks/{task_id}/answers")
@@ -408,7 +417,7 @@ def run_handoff(task_id: str, user: dict = Depends(current_user)):
             card = {key: value_of(task, key) for key in list(FIELDS) + list(EXTRAS) + ["deadline"]
                     if confirmed(task, key)}
             try:
-                ai_checks = review_handoff(card)
+                ai_checks = review_handoff(card, user["id"], task_id)
                 for check in result["checks"]:
                     ai_check = ai_checks[check["id"]]
                     if check["passed"] and not ai_check["passed"]:
@@ -537,3 +546,87 @@ def confirm_progress(proposal_id: str, user: dict = Depends(current_user)):
         db.execute("UPDATE proposals SET progress_awarded = 1 WHERE id = ?", (proposal_id,))
         db.execute("UPDATE teams SET points = points + 20 WHERE id = ?", (proposal["team_id"],))
         return {"proposal": get_proposal_or_404(db, proposal_id), "points_awarded": 20}
+
+
+@app.get("/api/admin/bootstrap-status")
+def admin_bootstrap_status(_: dict = Depends(current_user)):
+    configured = len(os.getenv("ADMIN_BOOTSTRAP_TOKEN", "").strip()) >= 24
+    with connect() as db:
+        available = db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0] == 0
+    return {"available": available, "configured": configured}
+
+
+@app.post("/api/admin/bootstrap")
+def bootstrap_admin(payload: BootstrapPayload, user: dict = Depends(current_user)):
+    secret = os.getenv("ADMIN_BOOTSTRAP_TOKEN", "").strip()
+    if len(secret) < 24:
+        raise HTTPException(503, "Сначала задайте ADMIN_BOOTSTRAP_TOKEN (не менее 24 символов) в .env")
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0]:
+            raise HTTPException(409, "Администратор уже назначен")
+        if not hmac.compare_digest(payload.token, secret):
+            raise HTTPException(403, "Неверный токен назначения администратора")
+        db.execute("UPDATE users SET role = 'admin' WHERE id = ?", (user["id"],))
+        db.execute("INSERT INTO role_audit VALUES (?, ?, ?, ?, ?, ?)",
+                   (str(uuid.uuid4()), user["id"], user["id"], user["role"], "admin", now()))
+        return user_with_team(db, user["id"])
+
+
+@app.get("/api/admin/overview")
+def admin_overview(user: dict = Depends(current_user)):
+    require_role(user, "admin")
+    with connect() as db:
+        count = lambda sql: db.execute(sql).fetchone()[0]
+        users = [dict(row) for row in db.execute("""SELECT u.id, u.email, u.name, u.organization, u.role, u.created_at,
+                    (SELECT COUNT(*) FROM tasks t WHERE t.owner_id = u.id) AS tasks_count,
+                    (SELECT COUNT(*) FROM ai_usage a WHERE a.actor_id = u.id) AS ai_calls
+                    FROM users u ORDER BY u.created_at DESC""")]
+        usage = [dict(row) for row in db.execute("""SELECT a.*, u.email AS actor_email, t.title AS task_title
+                    FROM ai_usage a LEFT JOIN users u ON u.id = a.actor_id
+                    LEFT JOIN tasks t ON t.id = a.task_id ORDER BY a.created_at DESC LIMIT 100""")]
+        audit = [dict(row) for row in db.execute("""SELECT r.*, actor.email AS actor_email, target.email AS target_email
+                    FROM role_audit r JOIN users actor ON actor.id = r.actor_id
+                    JOIN users target ON target.id = r.target_id ORDER BY r.created_at DESC LIMIT 30""")]
+        totals = dict(db.execute("""SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_calls,
+                    COALESCE(SUM(CASE WHEN estimated_cost_usd IS NULL AND status = 'completed' THEN 1 ELSE 0 END), 0) AS unpriced_calls
+                    FROM ai_usage""").fetchone())
+        return {"stats": {"users": count("SELECT COUNT(*) FROM users"),
+                          "businesses": count("SELECT COUNT(*) FROM users WHERE role = 'business'"),
+                          "teams": count("SELECT COUNT(*) FROM users WHERE role = 'team'"),
+                          "admins": count("SELECT COUNT(*) FROM users WHERE role = 'admin'"),
+                          "tasks": count("SELECT COUNT(*) FROM tasks"),
+                          "published": count("SELECT COUNT(*) FROM tasks WHERE published = 1"),
+                          "proposals": count("SELECT COUNT(*) FROM proposals"),
+                          "pending_proposals": count("SELECT COUNT(*) FROM proposals WHERE status = 'pending'")},
+                "usage": totals, "users": users, "recent_usage": usage, "role_audit": audit,
+                "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+                "ai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip())}
+
+
+@app.patch("/api/admin/users/{target_id}/role")
+def admin_change_role(target_id: str, payload: RolePayload, user: dict = Depends(current_user)):
+    require_role(user, "admin")
+    if payload.role not in {"admin", "business", "team"}:
+        raise HTTPException(422, "Недопустимая роль")
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        target = db.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone()
+        if target is None:
+            raise HTTPException(404, "Пользователь не найден")
+        if target["role"] == payload.role:
+            return user_with_team(db, target_id)
+        if target["role"] == "admin" and db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0] <= 1:
+            raise HTTPException(409, "Нельзя снять роль последнего администратора")
+        if payload.role == "team" and db.execute("SELECT 1 FROM teams WHERE user_id = ?", (target_id,)).fetchone() is None:
+            initials = "".join(word[0] for word in target["organization"].split()[:2]).upper()[:2] or "TM"
+            db.execute("INSERT INTO teams VALUES (?, ?, ?, ?, ?, 0)",
+                       (str(uuid.uuid4()), target_id, target["organization"], "[]", initials))
+        db.execute("UPDATE users SET role = ? WHERE id = ?", (payload.role, target_id))
+        db.execute("INSERT INTO role_audit VALUES (?, ?, ?, ?, ?, ?)",
+                   (str(uuid.uuid4()), user["id"], target_id, target["role"], payload.role, now()))
+        return user_with_team(db, target_id)

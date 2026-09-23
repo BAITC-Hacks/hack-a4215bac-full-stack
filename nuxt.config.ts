@@ -2,14 +2,14 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-09-23',
   devtools: { enabled: false },
   ssr: false,
-  css: ['~/assets/main.css'],
+  css: ['~/assets/main.css', '~/assets/rebrand.css', '~/assets/polish.css'],
   app: {
     head: {
-      title: 'FORGE — от проблемы к задаче',
+      title: 'FORGE — практические задачи AI Sana',
       htmlAttrs: { lang: 'ru' },
       meta: [
         { name: 'description', content: 'FORGE помогает бизнесу превращать реальные проблемы в понятные и измеримые задачи для студенческих команд.' },
-        { name: 'theme-color', content: '#193b68' },
+        { name: 'theme-color', content: '#0d0e11' },
       ],
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     },
